@@ -1,0 +1,19 @@
+# Copy this file to application-local.yml, fill in only local credentials, then start with:
+# .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"
+app:
+  datasource:
+    system:
+      jdbc-url: jdbc:mysql://localhost:3306/ai_analyst?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+      username: app_rw
+      password: replace-with-your-system-password
+      maximum-pool-size: 10
+    business:
+      jdbc-url: jdbc:mysql://localhost:3306/ai_business?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+      username: app_readonly
+      password: replace-with-your-readonly-password
+      maximum-pool-size: 8
+
+security:
+  jwt:
+    # Use a private random value with at least 32 characters. Never commit the actual value.
+    secret: replace-with-a-private-random-secret-at-least-32-characters

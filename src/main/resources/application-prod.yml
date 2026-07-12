@@ -1,0 +1,8 @@
+spring:
+  output:
+    ansi:
+      enabled: never
+
+logging:
+  level:
+    com.aianalyst: INFO

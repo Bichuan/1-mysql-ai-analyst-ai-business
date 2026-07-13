@@ -2,6 +2,7 @@ package com.aianalyst.service.impl;
 
 import com.aianalyst.common.SqlExecutionException;
 import com.aianalyst.service.DataMaskingService;
+import com.aianalyst.service.ResultAnalysisService;
 import com.aianalyst.service.SqlExecutionService;
 import com.aianalyst.service.TextToSqlService;
 import com.aianalyst.vo.QueryResultVO;
@@ -37,6 +38,9 @@ class DataQueryServiceImplTest {
     @Mock
     private DataMaskingService dataMaskingService;
 
+    @Mock
+    private ResultAnalysisService resultAnalysisService;
+
     @InjectMocks
     private DataQueryServiceImpl dataQueryService;
 
@@ -46,9 +50,11 @@ class DataQueryServiceImplTest {
         String auditedSql = "SELECT id, customer_name FROM biz_customer LIMIT 5";
         List<Map<String, Object>> rows = List.of(Map.of("id", 1L, "customer_name", "客户1"));
         List<Map<String, Object>> maskedRows = List.of(Map.of("id", 1L, "customer_name", "客**1"));
+        String summary = "共返回 1 条客户数据。";
         when(textToSqlService.generateSql(7L, question)).thenReturn(new SqlGenerationVO(question, auditedSql));
         when(sqlExecutionService.executeAuditedSelect(auditedSql)).thenReturn(rows);
         when(dataMaskingService.maskRows(rows)).thenReturn(maskedRows);
+        when(resultAnalysisService.analyze(question, auditedSql, maskedRows, 1)).thenReturn(summary);
 
         QueryResultVO result = dataQueryService.query(7L, question);
 
@@ -56,9 +62,11 @@ class DataQueryServiceImplTest {
         assertThat(result.sql()).isEqualTo(auditedSql);
         assertThat(result.rows()).containsExactlyElementsOf(maskedRows);
         assertThat(result.rowCount()).isEqualTo(1);
+        assertThat(result.summary()).isEqualTo(summary);
         verify(textToSqlService).generateSql(7L, question);
         verify(sqlExecutionService).executeAuditedSelect(auditedSql);
         verify(dataMaskingService).maskRows(rows);
+        verify(resultAnalysisService).analyze(question, auditedSql, maskedRows, 1);
     }
 
     @Test
@@ -68,6 +76,7 @@ class DataQueryServiceImplTest {
         String correctedSql = "SELECT customer_name FROM biz_customer LIMIT 5";
         List<Map<String, Object>> rows = List.of(Map.of("customer_name", "客户1"));
         List<Map<String, Object>> maskedRows = List.of(Map.of("customer_name", "客**1"));
+        String summary = "共返回 1 条客户数据。";
         SqlExecutionException syntaxFailure = new SqlExecutionException(failedSql,
                 new BadSqlGrammarException("query", failedSql, new SQLException("Unknown column 'customer_nam'")));
         when(textToSqlService.generateSql(7L, question)).thenReturn(new SqlGenerationVO(question, failedSql));
@@ -75,14 +84,17 @@ class DataQueryServiceImplTest {
         when(textToSqlService.correctSql(anyString(), anyString(), anyString())).thenReturn(correctedSql);
         when(sqlExecutionService.executeAuditedSelect(correctedSql)).thenReturn(rows);
         when(dataMaskingService.maskRows(rows)).thenReturn(maskedRows);
+        when(resultAnalysisService.analyze(question, correctedSql, maskedRows, 1)).thenReturn(summary);
 
         QueryResultVO result = dataQueryService.query(7L, question);
 
         assertThat(result.sql()).isEqualTo(correctedSql);
         assertThat(result.rows()).containsExactlyElementsOf(maskedRows);
+        assertThat(result.summary()).isEqualTo(summary);
         verify(textToSqlService).correctSql(question, failedSql, "query; bad SQL grammar [" + failedSql + "]");
         verify(sqlExecutionService).executeAuditedSelect(correctedSql);
         verify(dataMaskingService).maskRows(rows);
+        verify(resultAnalysisService).analyze(question, correctedSql, maskedRows, 1);
     }
 
     @Test

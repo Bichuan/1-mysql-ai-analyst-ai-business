@@ -3,6 +3,7 @@ package com.aianalyst.service.impl;
 import com.aianalyst.common.SqlExecutionException;
 import com.aianalyst.service.DataMaskingService;
 import com.aianalyst.service.DataQueryService;
+import com.aianalyst.service.ResultAnalysisService;
 import com.aianalyst.service.SqlExecutionService;
 import com.aianalyst.service.TextToSqlService;
 import com.aianalyst.vo.QueryResultVO;
@@ -28,13 +29,16 @@ public class DataQueryServiceImpl implements DataQueryService {
     private final TextToSqlService textToSqlService;
     private final SqlExecutionService sqlExecutionService;
     private final DataMaskingService dataMaskingService;
+    private final ResultAnalysisService resultAnalysisService;
 
     public DataQueryServiceImpl(TextToSqlService textToSqlService,
                                 SqlExecutionService sqlExecutionService,
-                                DataMaskingService dataMaskingService) {
+                                DataMaskingService dataMaskingService,
+                                ResultAnalysisService resultAnalysisService) {
         this.textToSqlService = textToSqlService;
         this.sqlExecutionService = sqlExecutionService;
         this.dataMaskingService = dataMaskingService;
+        this.resultAnalysisService = resultAnalysisService;
     }
 
     @Override
@@ -48,7 +52,10 @@ public class DataQueryServiceImpl implements DataQueryService {
                 List<Map<String, Object>> rawRows = sqlExecutionService.executeAuditedSelect(sql);
                 // 原始结果仅在当前方法内短暂存在；对外响应和后续 AI 总结都只能使用脱敏副本。
                 List<Map<String, Object>> maskedRows = dataMaskingService.maskRows(rawRows);
-                return new QueryResultVO(generatedSql.question(), sql, maskedRows, maskedRows.size());
+                // 总结失败时 ResultAnalysisService 会返回降级文案，不能让可用查询结果被外部模型故障拖垮。
+                String summary = resultAnalysisService.analyze(
+                        generatedSql.question(), sql, maskedRows, maskedRows.size());
+                return new QueryResultVO(generatedSql.question(), sql, maskedRows, maskedRows.size(), summary);
             } catch (SqlExecutionException exception) {
                 // 只有 SQL 语法/字段类错误可能由模型修复；网络、超时和权限错误重试没有意义。
                 if (!isCorrectableSyntaxFailure(exception)

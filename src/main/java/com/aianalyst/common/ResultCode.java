@@ -11,6 +11,8 @@ public enum ResultCode {
     FORBIDDEN(40300, "无访问权限"),
     TOO_MANY_REQUESTS(42900, "查询过于频繁，请稍后再试"),
     SQL_AUDIT_FAILED(40002, "SQL 安全审核未通过"),
+    READ_ONLY_QUERY_REQUIRED(40003, "系统只支持只读数据查询，不支持数据修改操作"),
+    SQL_EXECUTION_FAILED(50002, "数据查询执行失败，请稍后再试"),
     NOT_FOUND(40400, "请求资源不存在"),
     BUSINESS_ERROR(50001, "业务处理失败"),
     SYSTEM_ERROR(50000, "系统繁忙，请稍后重试");

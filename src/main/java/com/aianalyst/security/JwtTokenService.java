@@ -14,7 +14,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Date;
 
-/** Creates and validates signed JWT access tokens. */
+/**
+ * 负责 JWT 的签发与验签。Token 中只保存用户标识、用户名和角色等身份声明，
+ * 不保存密码或数据库敏感信息；完整性依赖 HMAC 签名保证。
+ */
 @Service
 public class JwtTokenService {
 
@@ -30,17 +33,20 @@ public class JwtTokenService {
     public String createToken(User user) {
         Instant now = Instant.now();
         return Jwts.builder()
+                // issuer 防止同一密钥下、来自其他系统的 Token 被误接受。
                 .issuer(properties.getIssuer())
                 .subject(user.getUsername())
                 .claim(USER_ID_CLAIM, user.getId())
                 .claim(ROLE_CLAIM, user.getRole())
                 .issuedAt(Date.from(now))
+                // 过期时间由配置统一控制，避免在业务代码中散落魔法值。
                 .expiration(Date.from(now.plusSeconds(properties.getExpirationSeconds())))
                 .signWith(signingKey())
                 .compact();
     }
 
     public JwtUserClaims parseToken(String token) {
+        // verifyWith 会同时校验签名；parseSignedClaims 还会校验过期时间等标准声明。
         Claims claims = Jwts.parser()
                 .verifyWith(signingKey())
                 .requireIssuer(properties.getIssuer())
@@ -68,6 +74,7 @@ public class JwtTokenService {
 
     private SecretKey signingKey() {
         String secret = properties.getSecret();
+        // HMAC 密钥过短会显著降低安全性，因此启动/签发时直接拒绝不合规配置。
         if (!StringUtils.hasText(secret) || secret.getBytes(StandardCharsets.UTF_8).length < 32) {
             throw new IllegalStateException("JWT 密钥未配置或长度不足 32 字节");
         }

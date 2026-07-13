@@ -3,6 +3,7 @@ package com.aianalyst.handler;
 import com.aianalyst.common.BusinessException;
 import com.aianalyst.common.Result;
 import com.aianalyst.common.ResultCode;
+import com.aianalyst.common.SqlExecutionException;
 import com.aianalyst.common.ValidationError;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -19,7 +20,8 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import java.util.List;
 
 /**
- * Translates framework and business exceptions into the project's standard response format.
+ * 将框架与业务异常统一转换为 API 响应。
+ * 对外返回稳定、无敏感信息的错误码；对内日志保留必要堆栈，避免暴露数据库结构和连接细节。
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -64,6 +66,14 @@ public class GlobalExceptionHandler {
                 : HttpStatus.BAD_REQUEST;
         return ResponseEntity.status(status)
                 .body(Result.error(exception.getResultCode(), exception.getMessage()));
+    }
+
+    @ExceptionHandler(SqlExecutionException.class)
+    public ResponseEntity<Result<Void>> handleSqlExecutionException(SqlExecutionException exception) {
+        // 原始数据库异常只记录在服务端，前端只能看到通用执行失败提示。
+        log.error("Business SQL execution failed", exception.getCause());
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(Result.error(ResultCode.SQL_EXECUTION_FAILED));
     }
 
     @ExceptionHandler(Exception.class)

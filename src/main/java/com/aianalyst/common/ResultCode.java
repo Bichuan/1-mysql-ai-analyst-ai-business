@@ -9,6 +9,8 @@ public enum ResultCode {
     PARAM_ERROR(40001, "请求参数不合法"),
     UNAUTHORIZED(40100, "未登录或登录已失效"),
     FORBIDDEN(40300, "无访问权限"),
+    TOO_MANY_REQUESTS(42900, "查询过于频繁，请稍后再试"),
+    SQL_AUDIT_FAILED(40002, "SQL 安全审核未通过"),
     NOT_FOUND(40400, "请求资源不存在"),
     BUSINESS_ERROR(50001, "业务处理失败"),
     SYSTEM_ERROR(50000, "系统繁忙，请稍后重试");

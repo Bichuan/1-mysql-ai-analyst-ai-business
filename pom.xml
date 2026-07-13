@@ -21,6 +21,7 @@
         <java.version>17</java.version>
         <jjwt.version>0.12.6</jjwt.version>
         <langchain4j.version>1.17.2</langchain4j.version>
+        <jsqlparser.version>4.9</jsqlparser.version>
     </properties>
 
     <dependencies>
@@ -80,6 +81,11 @@
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-open-ai</artifactId>
             <version>${langchain4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.jsqlparser</groupId>
+            <artifactId>jsqlparser</artifactId>
+            <version>${jsqlparser.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

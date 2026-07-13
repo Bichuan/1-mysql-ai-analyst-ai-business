@@ -59,7 +59,10 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleBusinessException(BusinessException exception) {
         log.warn("Business exception, code={}, message={}",
                 exception.getResultCode().getCode(), exception.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        HttpStatus status = exception.getResultCode() == ResultCode.TOO_MANY_REQUESTS
+                ? HttpStatus.TOO_MANY_REQUESTS
+                : HttpStatus.BAD_REQUEST;
+        return ResponseEntity.status(status)
                 .body(Result.error(exception.getResultCode(), exception.getMessage()));
     }
 

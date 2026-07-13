@@ -6,3 +6,13 @@ spring:
 logging:
   level:
     com.aianalyst: INFO
+
+# API documentation is available in local/development environments only.
+knife4j:
+  enable: false
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

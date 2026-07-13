@@ -17,3 +17,9 @@ security:
   jwt:
     # Use a private random value with at least 32 characters. Never commit the actual value.
     secret: replace-with-a-private-random-secret-at-least-32-characters
+
+ai:
+  deepseek:
+    # You may fill in the real Key here because application-local.yml is ignored by Git.
+    # Alternatively, keep this placeholder and define the DEEPSEEK_API_KEY environment variable.
+    api-key: ${DEEPSEEK_API_KEY:}

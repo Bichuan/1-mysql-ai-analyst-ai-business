@@ -1,0 +1,86 @@
+name: ai-data-analyst
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Please set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_SYSTEM_PASSWORD: ${MYSQL_SYSTEM_PASSWORD:?Please set MYSQL_SYSTEM_PASSWORD in .env}
+      MYSQL_READONLY_PASSWORD: ${MYSQL_READONLY_PASSWORD:?Please set MYSQL_READONLY_PASSWORD in .env}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql-init/01-create-databases-and-users.sh:/docker-entrypoint-initdb.d/01-create-databases-and-users.sh:ro
+      - ./sql/02_system_schema.sql:/docker-entrypoint-initdb.d/02_system_schema.sql:ro
+      - ./sql/03_business_schema.sql:/docker-entrypoint-initdb.d/03_business_schema.sql:ro
+      - ./sql/04_business_seed_data.sql:/docker-entrypoint-initdb.d/04_business_seed_data.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - backend
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks:
+      - backend
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-data-analyst:local
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Shanghai
+      SPRING_PROFILES_ACTIVE: prod
+      APP_DATASOURCE_SYSTEM_JDBC_URL: jdbc:mysql://mysql:3306/ai_analyst?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      APP_DATASOURCE_SYSTEM_USERNAME: app_rw
+      APP_DATASOURCE_SYSTEM_PASSWORD: ${MYSQL_SYSTEM_PASSWORD}
+      APP_DATASOURCE_BUSINESS_JDBC_URL: jdbc:mysql://mysql:3306/ai_business?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      APP_DATASOURCE_BUSINESS_USERNAME: app_readonly
+      APP_DATASOURCE_BUSINESS_PASSWORD: ${MYSQL_READONLY_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DATABASE: 2
+      JWT_SECRET: ${JWT_SECRET:?Please set JWT_SECRET in .env}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?Please set DEEPSEEK_API_KEY in .env}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://localhost:8080/api/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 45s
+    networks:
+      - backend
+
+volumes:
+  mysql-data:
+  redis-data:
+
+networks:
+  backend:
+    driver: bridge

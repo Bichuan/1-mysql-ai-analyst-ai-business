@@ -5,7 +5,9 @@ import com.aianalyst.common.ResultCode;
 import com.aianalyst.common.SqlExecutionException;
 import com.aianalyst.dto.QueryHistoryRecordCommand;
 import com.aianalyst.service.DataMaskingService;
+import com.aianalyst.service.QueryCacheService;
 import com.aianalyst.service.QueryHistoryService;
+import com.aianalyst.service.QueryRequestGuard;
 import com.aianalyst.service.ResultAnalysisService;
 import com.aianalyst.service.SqlExecutionService;
 import com.aianalyst.service.TextToSqlService;
@@ -23,16 +25,25 @@ import org.springframework.jdbc.BadSqlGrammarException;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class DataQueryServiceImplTest {
+
+    @Mock
+    private QueryRequestGuard queryRequestGuard;
+
+    @Mock
+    private QueryCacheService queryCacheService;
 
     @Mock
     private TextToSqlService textToSqlService;
@@ -53,13 +64,14 @@ class DataQueryServiceImplTest {
     private DataQueryServiceImpl dataQueryService;
 
     @Test
-    void shouldGenerateAuditAndExecuteQuery() {
-        String question = "查询前5个客户";
+    void shouldGenerateAuditExecuteAndCacheMaskedQuery() {
+        String question = "查询前一个客户";
         String auditedSql = "SELECT id, customer_name FROM biz_customer LIMIT 5";
         List<Map<String, Object>> rows = List.of(Map.of("id", 1L, "customer_name", "客户1"));
-        List<Map<String, Object>> maskedRows = List.of(Map.of("id", 1L, "customer_name", "客**1"));
+        List<Map<String, Object>> maskedRows = List.of(Map.of("id", 1L, "customer_name", "客*1"));
         String summary = "共返回 1 条客户数据。";
-        when(textToSqlService.generateSql(7L, question)).thenReturn(new SqlGenerationVO(question, auditedSql));
+        when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
+        when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, auditedSql));
         when(sqlExecutionService.executeAuditedSelect(auditedSql)).thenReturn(rows);
         when(dataMaskingService.maskRows(rows)).thenReturn(maskedRows);
         when(resultAnalysisService.analyze(question, auditedSql, maskedRows, 1)).thenReturn(summary);
@@ -71,10 +83,15 @@ class DataQueryServiceImplTest {
         assertThat(result.rows()).containsExactlyElementsOf(maskedRows);
         assertThat(result.rowCount()).isEqualTo(1);
         assertThat(result.summary()).isEqualTo(summary);
-        verify(textToSqlService).generateSql(7L, question);
+        verify(queryRequestGuard).validateAndAcquire(7L, question);
+        verify(textToSqlService).generateSql(question);
         verify(sqlExecutionService).executeAuditedSelect(auditedSql);
         verify(dataMaskingService).maskRows(rows);
         verify(resultAnalysisService).analyze(question, auditedSql, maskedRows, 1);
+        ArgumentCaptor<QueryResultVO> cacheCaptor = ArgumentCaptor.forClass(QueryResultVO.class);
+        verify(queryCacheService).put(eq(7L), eq(question), cacheCaptor.capture());
+        // 缓存写入参数和接口响应一致，证明 DataQuery 层没有把 rawRows 交给 Redis。
+        assertThat(cacheCaptor.getValue().rows()).containsExactlyElementsOf(maskedRows);
         ArgumentCaptor<QueryHistoryRecordCommand> historyCaptor =
                 ArgumentCaptor.forClass(QueryHistoryRecordCommand.class);
         verify(queryHistoryService).recordAsync(historyCaptor.capture());
@@ -88,16 +105,36 @@ class DataQueryServiceImplTest {
     }
 
     @Test
+    void shouldReturnCachedResultWithoutCallingModelOrDatabase() {
+        String question = " 查询 客户 ";
+        List<Map<String, Object>> maskedRows = List.of(Map.of("email", "t***@gmail.com"));
+        QueryResultVO cachedResult = new QueryResultVO("查询 客户", "SELECT email FROM biz_customer",
+                maskedRows, 1, "本次查询返回 1 条数据");
+        when(queryCacheService.get(7L, question)).thenReturn(Optional.of(cachedResult));
+
+        QueryResultVO result = dataQueryService.query(7L, question);
+
+        assertThat(result.question()).isEqualTo(question);
+        assertThat(result.rows()).containsExactlyElementsOf(maskedRows);
+        verify(queryRequestGuard).validateAndAcquire(7L, question);
+        verifyNoInteractions(textToSqlService, sqlExecutionService, dataMaskingService, resultAnalysisService);
+        verify(queryHistoryService).recordAsync(new QueryHistoryRecordCommand(
+                7L, question, cachedResult.sql(), "PASS", null, maskedRows, cachedResult.summary(),
+                0, "SUCCESS", null));
+    }
+
+    @Test
     void shouldCorrectBadSqlGrammarAndExecuteCorrectedSql() {
-        String question = "查询前5个客户";
+        String question = "查询前一个客户";
         String failedSql = "SELECT customer_nam FROM biz_customer LIMIT 5";
         String correctedSql = "SELECT customer_name FROM biz_customer LIMIT 5";
         List<Map<String, Object>> rows = List.of(Map.of("customer_name", "客户1"));
-        List<Map<String, Object>> maskedRows = List.of(Map.of("customer_name", "客**1"));
+        List<Map<String, Object>> maskedRows = List.of(Map.of("customer_name", "客*1"));
         String summary = "共返回 1 条客户数据。";
         SqlExecutionException syntaxFailure = new SqlExecutionException(failedSql,
                 new BadSqlGrammarException("query", failedSql, new SQLException("Unknown column 'customer_nam'")));
-        when(textToSqlService.generateSql(7L, question)).thenReturn(new SqlGenerationVO(question, failedSql));
+        when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
+        when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, failedSql));
         when(sqlExecutionService.executeAuditedSelect(failedSql)).thenThrow(syntaxFailure);
         when(textToSqlService.correctSql(anyString(), anyString(), anyString())).thenReturn(correctedSql);
         when(sqlExecutionService.executeAuditedSelect(correctedSql)).thenReturn(rows);
@@ -107,26 +144,24 @@ class DataQueryServiceImplTest {
         QueryResultVO result = dataQueryService.query(7L, question);
 
         assertThat(result.sql()).isEqualTo(correctedSql);
-        assertThat(result.rows()).containsExactlyElementsOf(maskedRows);
-        assertThat(result.summary()).isEqualTo(summary);
         verify(textToSqlService).correctSql(question, failedSql, "query; bad SQL grammar [" + failedSql + "]");
-        verify(sqlExecutionService).executeAuditedSelect(correctedSql);
-        verify(dataMaskingService).maskRows(rows);
-        verify(resultAnalysisService).analyze(question, correctedSql, maskedRows, 1);
+        verify(queryCacheService).put(7L, question, result);
     }
 
     @Test
     void shouldNotCorrectConnectionFailure() {
-        String question = "查询前5个客户";
+        String question = "查询前一个客户";
         String sql = "SELECT customer_name FROM biz_customer LIMIT 5";
         SqlExecutionException connectionFailure = new SqlExecutionException(sql,
                 new DataAccessResourceFailureException("connection refused"));
-        when(textToSqlService.generateSql(7L, question)).thenReturn(new SqlGenerationVO(question, sql));
+        when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
+        when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, sql));
         when(sqlExecutionService.executeAuditedSelect(sql)).thenThrow(connectionFailure);
 
         assertThatThrownBy(() -> dataQueryService.query(7L, question))
                 .isSameAs(connectionFailure);
         verify(textToSqlService, never()).correctSql(anyString(), anyString(), anyString());
+        verify(queryCacheService, never()).put(7L, question, null);
         ArgumentCaptor<QueryHistoryRecordCommand> historyCaptor =
                 ArgumentCaptor.forClass(QueryHistoryRecordCommand.class);
         verify(queryHistoryService).recordAsync(historyCaptor.capture());
@@ -140,14 +175,15 @@ class DataQueryServiceImplTest {
 
     @Test
     void shouldStopAfterTwoCorrectionAttempts() {
-        String question = "查询前5个客户";
+        String question = "查询前一个客户";
         String firstSql = "SELECT bad_column_1 FROM biz_customer LIMIT 5";
         String secondSql = "SELECT bad_column_2 FROM biz_customer LIMIT 5";
         String thirdSql = "SELECT bad_column_3 FROM biz_customer LIMIT 5";
         SqlExecutionException firstFailure = badSqlGrammarFailure(firstSql);
         SqlExecutionException secondFailure = badSqlGrammarFailure(secondSql);
         SqlExecutionException thirdFailure = badSqlGrammarFailure(thirdSql);
-        when(textToSqlService.generateSql(7L, question)).thenReturn(new SqlGenerationVO(question, firstSql));
+        when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
+        when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, firstSql));
         when(sqlExecutionService.executeAuditedSelect(firstSql)).thenThrow(firstFailure);
         when(textToSqlService.correctSql(question, firstSql, firstFailure.getCause().getMessage()))
                 .thenReturn(secondSql);
@@ -166,11 +202,12 @@ class DataQueryServiceImplTest {
     void shouldRecordReadOnlyIntentRejectionAsAuditReject() {
         String question = "删除第一个客户";
         BusinessException rejection = new BusinessException(ResultCode.READ_ONLY_QUERY_REQUIRED);
-        when(textToSqlService.generateSql(7L, question)).thenThrow(rejection);
+        org.mockito.Mockito.doThrow(rejection).when(queryRequestGuard).validateAndAcquire(7L, question);
 
         assertThatThrownBy(() -> dataQueryService.query(7L, question))
                 .isSameAs(rejection);
 
+        verifyNoInteractions(queryCacheService, textToSqlService, sqlExecutionService);
         ArgumentCaptor<QueryHistoryRecordCommand> historyCaptor =
                 ArgumentCaptor.forClass(QueryHistoryRecordCommand.class);
         verify(queryHistoryService).recordAsync(historyCaptor.capture());

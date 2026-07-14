@@ -5,7 +5,7 @@ import com.aianalyst.vo.SqlGenerationVO;
 /** Generates SQL from a natural-language business question without executing it. */
 public interface TextToSqlService {
 
-    SqlGenerationVO generateSql(Long userId, String question);
+    SqlGenerationVO generateSql(String question);
 
     /**
      * Repairs a SQL statement after a syntax-level database failure. The returned SQL has

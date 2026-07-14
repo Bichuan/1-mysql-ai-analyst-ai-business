@@ -6,7 +6,7 @@ import com.aianalyst.dto.QueryRequest;
 import com.aianalyst.dto.SqlGenerationRequest;
 import com.aianalyst.security.SecurityUser;
 import com.aianalyst.service.DataQueryService;
-import com.aianalyst.service.TextToSqlService;
+import com.aianalyst.service.SqlGenerationService;
 import com.aianalyst.vo.QueryResultVO;
 import com.aianalyst.vo.SqlGenerationVO;
 import io.swagger.v3.oas.annotations.Operation;
@@ -19,18 +19,18 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** AI query entry point. This phase generates SQL only and never executes dynamic SQL. */
+/** AI query entry point. It only maps HTTP requests to application services. */
 @RestController
 @RequestMapping("/queries")
 @Tag(name = "AI 数据查询", description = "自然语言转 SQL；生成结果将在后续流程中审核和执行")
 @SecurityRequirement(name = OpenApiConfig.BEARER_AUTH_SCHEME)
 public class QueryController {
 
-    private final TextToSqlService textToSqlService;
+    private final SqlGenerationService sqlGenerationService;
     private final DataQueryService dataQueryService;
 
-    public QueryController(TextToSqlService textToSqlService, DataQueryService dataQueryService) {
-        this.textToSqlService = textToSqlService;
+    public QueryController(SqlGenerationService sqlGenerationService, DataQueryService dataQueryService) {
+        this.sqlGenerationService = sqlGenerationService;
         this.dataQueryService = dataQueryService;
     }
 
@@ -41,7 +41,7 @@ public class QueryController {
             security = @SecurityRequirement(name = OpenApiConfig.BEARER_AUTH_SCHEME))
     public Result<SqlGenerationVO> generateSql(@Valid @RequestBody SqlGenerationRequest request,
                                                @AuthenticationPrincipal SecurityUser securityUser) {
-        return Result.success(textToSqlService.generateSql(securityUser.getId(), request.question()));
+        return Result.success(sqlGenerationService.generate(securityUser.getId(), request.question()));
     }
 
     @PostMapping("/query")

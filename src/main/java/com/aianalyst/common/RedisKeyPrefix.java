@@ -4,7 +4,8 @@ package com.aianalyst.common;
 public final class RedisKeyPrefix {
 
     public static final String QUERY_RATE_LIMIT = "rate_limit:";
-    public static final String QUERY_CACHE = "query_cache:";
+    /** v1 allows a later cache payload/key migration without reading incompatible old values. */
+    public static final String QUERY_CACHE = "query_cache:v1:";
 
     private RedisKeyPrefix() {
     }

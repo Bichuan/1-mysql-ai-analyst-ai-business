@@ -19,7 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TextToSqlIntegrationTest {
 
     @Autowired
-    private TextToSqlService textToSqlService;
+    private SqlGenerationService sqlGenerationService;
 
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
@@ -33,7 +33,7 @@ class TextToSqlIntegrationTest {
 
     @Test
     void shouldGenerateSelectSqlForBusinessQuestion() {
-        SqlGenerationVO result = textToSqlService.generateSql(testUserId, "查询今年销售额最高的10个客户");
+        SqlGenerationVO result = sqlGenerationService.generate(testUserId, "查询今年销售额最高的10个客户");
 
         assertThat(result.question()).isEqualTo("查询今年销售额最高的10个客户");
         assertThat(result.sql().trim()).startsWithIgnoringCase("SELECT");

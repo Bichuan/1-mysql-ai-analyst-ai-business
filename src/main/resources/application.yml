@@ -11,6 +11,8 @@ spring:
       # 本机通过 VM 网络连接 Redis；可用 REDIS_HOST、REDIS_PORT 环境变量覆盖。
       host: ${REDIS_HOST:192.168.6.7}
       port: ${REDIS_PORT:6379}
+      # 业务 Redis 使用 2 号逻辑库，和本机其他学习项目或默认库的数据隔离。
+      database: ${REDIS_DATABASE:2}
       connect-timeout: 2s
       timeout: 2s
 

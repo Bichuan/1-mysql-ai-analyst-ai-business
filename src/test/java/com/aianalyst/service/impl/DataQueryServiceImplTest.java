@@ -1,7 +1,11 @@
 package com.aianalyst.service.impl;
 
+import com.aianalyst.common.BusinessException;
+import com.aianalyst.common.ResultCode;
 import com.aianalyst.common.SqlExecutionException;
+import com.aianalyst.dto.QueryHistoryRecordCommand;
 import com.aianalyst.service.DataMaskingService;
+import com.aianalyst.service.QueryHistoryService;
 import com.aianalyst.service.ResultAnalysisService;
 import com.aianalyst.service.SqlExecutionService;
 import com.aianalyst.service.TextToSqlService;
@@ -9,6 +13,7 @@ import com.aianalyst.vo.QueryResultVO;
 import com.aianalyst.vo.SqlGenerationVO;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -41,6 +46,9 @@ class DataQueryServiceImplTest {
     @Mock
     private ResultAnalysisService resultAnalysisService;
 
+    @Mock
+    private QueryHistoryService queryHistoryService;
+
     @InjectMocks
     private DataQueryServiceImpl dataQueryService;
 
@@ -67,6 +75,16 @@ class DataQueryServiceImplTest {
         verify(sqlExecutionService).executeAuditedSelect(auditedSql);
         verify(dataMaskingService).maskRows(rows);
         verify(resultAnalysisService).analyze(question, auditedSql, maskedRows, 1);
+        ArgumentCaptor<QueryHistoryRecordCommand> historyCaptor =
+                ArgumentCaptor.forClass(QueryHistoryRecordCommand.class);
+        verify(queryHistoryService).recordAsync(historyCaptor.capture());
+        assertThat(historyCaptor.getValue())
+                .extracting(QueryHistoryRecordCommand::userId,
+                        QueryHistoryRecordCommand::generatedSql,
+                        QueryHistoryRecordCommand::sqlAuditResult,
+                        QueryHistoryRecordCommand::maskedRows,
+                        QueryHistoryRecordCommand::status)
+                .containsExactly(7L, auditedSql, "PASS", maskedRows, "SUCCESS");
     }
 
     @Test
@@ -109,6 +127,15 @@ class DataQueryServiceImplTest {
         assertThatThrownBy(() -> dataQueryService.query(7L, question))
                 .isSameAs(connectionFailure);
         verify(textToSqlService, never()).correctSql(anyString(), anyString(), anyString());
+        ArgumentCaptor<QueryHistoryRecordCommand> historyCaptor =
+                ArgumentCaptor.forClass(QueryHistoryRecordCommand.class);
+        verify(queryHistoryService).recordAsync(historyCaptor.capture());
+        assertThat(historyCaptor.getValue())
+                .extracting(QueryHistoryRecordCommand::generatedSql,
+                        QueryHistoryRecordCommand::sqlAuditResult,
+                        QueryHistoryRecordCommand::status,
+                        QueryHistoryRecordCommand::errorMessage)
+                .containsExactly(sql, "PASS", "FAIL", ResultCode.SQL_EXECUTION_FAILED.getMessage());
     }
 
     @Test
@@ -133,6 +160,26 @@ class DataQueryServiceImplTest {
                 .isSameAs(thirdFailure);
         verify(textToSqlService).correctSql(question, firstSql, firstFailure.getCause().getMessage());
         verify(textToSqlService).correctSql(question, secondSql, secondFailure.getCause().getMessage());
+    }
+
+    @Test
+    void shouldRecordReadOnlyIntentRejectionAsAuditReject() {
+        String question = "删除第一个客户";
+        BusinessException rejection = new BusinessException(ResultCode.READ_ONLY_QUERY_REQUIRED);
+        when(textToSqlService.generateSql(7L, question)).thenThrow(rejection);
+
+        assertThatThrownBy(() -> dataQueryService.query(7L, question))
+                .isSameAs(rejection);
+
+        ArgumentCaptor<QueryHistoryRecordCommand> historyCaptor =
+                ArgumentCaptor.forClass(QueryHistoryRecordCommand.class);
+        verify(queryHistoryService).recordAsync(historyCaptor.capture());
+        assertThat(historyCaptor.getValue())
+                .extracting(QueryHistoryRecordCommand::generatedSql,
+                        QueryHistoryRecordCommand::sqlAuditResult,
+                        QueryHistoryRecordCommand::sqlAuditReason,
+                        QueryHistoryRecordCommand::status)
+                .containsExactly(null, "REJECT", ResultCode.READ_ONLY_QUERY_REQUIRED.getMessage(), "AUDIT_REJECT");
     }
 
     private SqlExecutionException badSqlGrammarFailure(String sql) {

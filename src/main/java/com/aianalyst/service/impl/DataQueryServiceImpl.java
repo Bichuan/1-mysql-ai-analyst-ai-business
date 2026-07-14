@@ -8,6 +8,7 @@ import com.aianalyst.service.DataMaskingService;
 import com.aianalyst.service.DataQueryService;
 import com.aianalyst.service.QueryCacheService;
 import com.aianalyst.service.QueryHistoryService;
+import com.aianalyst.service.QueryMetricsService;
 import com.aianalyst.service.QueryRequestGuard;
 import com.aianalyst.service.ResultAnalysisService;
 import com.aianalyst.service.SqlExecutionService;
@@ -41,6 +42,7 @@ public class DataQueryServiceImpl implements DataQueryService {
     private final DataMaskingService dataMaskingService;
     private final ResultAnalysisService resultAnalysisService;
     private final QueryHistoryService queryHistoryService;
+    private final QueryMetricsService queryMetricsService;
 
     public DataQueryServiceImpl(QueryRequestGuard queryRequestGuard,
                                 QueryCacheService queryCacheService,
@@ -48,7 +50,8 @@ public class DataQueryServiceImpl implements DataQueryService {
                                 SqlExecutionService sqlExecutionService,
                                 DataMaskingService dataMaskingService,
                                 ResultAnalysisService resultAnalysisService,
-                                QueryHistoryService queryHistoryService) {
+                                QueryHistoryService queryHistoryService,
+                                QueryMetricsService queryMetricsService) {
         this.queryRequestGuard = queryRequestGuard;
         this.queryCacheService = queryCacheService;
         this.textToSqlService = textToSqlService;
@@ -56,10 +59,12 @@ public class DataQueryServiceImpl implements DataQueryService {
         this.dataMaskingService = dataMaskingService;
         this.resultAnalysisService = resultAnalysisService;
         this.queryHistoryService = queryHistoryService;
+        this.queryMetricsService = queryMetricsService;
     }
 
     @Override
     public QueryResultVO query(Long userId, String question) {
+        long queryStartedAt = System.nanoTime();
         String sql = null;
         int totalSqlExecutionTime = 0;
         try {
@@ -87,7 +92,7 @@ public class DataQueryServiceImpl implements DataQueryService {
                     String summary = resultAnalysisService.analyze(
                             generatedSql.question(), sql, maskedRows, maskedRows.size());
                     QueryResultVO result = new QueryResultVO(
-                            generatedSql.question(), sql, maskedRows, maskedRows.size(), summary);
+                            generatedSql.question(), sql, maskedRows, maskedRows.size(), summary, false);
                     // 缓存只写入已审核、已执行、已脱敏且有总结的完整成功响应。
                     queryCacheService.put(userId, question, result);
                     recordSuccess(userId, generatedSql.question(), sql, maskedRows, summary, totalSqlExecutionTime);
@@ -111,13 +116,16 @@ public class DataQueryServiceImpl implements DataQueryService {
         } catch (RuntimeException exception) {
             recordFailure(userId, question, sql, totalSqlExecutionTime, exception);
             throw exception;
+        } finally {
+            // 无论成功、缓存命中或被安全规则拒绝，都记录端到端耗时，便于发现慢查询和外部模型抖动。
+            queryMetricsService.recordQueryDuration(System.nanoTime() - queryStartedAt);
         }
     }
 
     private QueryResultVO withCurrentQuestion(QueryResultVO cachedResult, String question) {
         // 缓存 Key 会归一化空白和大小写，但响应应回显用户本次实际输入，而非第一次写入缓存时的文本。
         return new QueryResultVO(question, cachedResult.sql(), cachedResult.rows(),
-                cachedResult.rowCount(), cachedResult.summary());
+                cachedResult.rowCount(), cachedResult.summary(), true);
     }
 
     private void recordSuccess(Long userId,

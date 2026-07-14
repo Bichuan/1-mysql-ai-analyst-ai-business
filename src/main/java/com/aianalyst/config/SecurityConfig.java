@@ -43,8 +43,10 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
                         // 登录、健康检查和接口文档必须匿名可访问；其余接口默认要求登录。
-                        .requestMatchers("/auth/**", "/health", "/error", "/doc.html", "/webjars/**",
+                        .requestMatchers("/auth/**", "/health", "/actuator/health", "/error", "/doc.html", "/webjars/**",
                                 "/swagger-ui/**", "/swagger-resources/**", "/v3/api-docs/**").permitAll()
+                        // metrics 可能暴露线程池和缓存运行状态，仅允许管理员通过 JWT 访问。
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .exceptionHandling(exception -> exception
                         .authenticationEntryPoint(authenticationEntryPoint)

@@ -7,6 +7,7 @@ import com.aianalyst.dto.QueryHistoryRecordCommand;
 import com.aianalyst.service.DataMaskingService;
 import com.aianalyst.service.QueryCacheService;
 import com.aianalyst.service.QueryHistoryService;
+import com.aianalyst.service.QueryMetricsService;
 import com.aianalyst.service.QueryRequestGuard;
 import com.aianalyst.service.ResultAnalysisService;
 import com.aianalyst.service.SqlExecutionService;
@@ -30,6 +31,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -60,6 +62,9 @@ class DataQueryServiceImplTest {
     @Mock
     private QueryHistoryService queryHistoryService;
 
+    @Mock
+    private QueryMetricsService queryMetricsService;
+
     @InjectMocks
     private DataQueryServiceImpl dataQueryService;
 
@@ -83,6 +88,7 @@ class DataQueryServiceImplTest {
         assertThat(result.rows()).containsExactlyElementsOf(maskedRows);
         assertThat(result.rowCount()).isEqualTo(1);
         assertThat(result.summary()).isEqualTo(summary);
+        assertThat(result.cacheHit()).isFalse();
         verify(queryRequestGuard).validateAndAcquire(7L, question);
         verify(textToSqlService).generateSql(question);
         verify(sqlExecutionService).executeAuditedSelect(auditedSql);
@@ -102,6 +108,7 @@ class DataQueryServiceImplTest {
                         QueryHistoryRecordCommand::maskedRows,
                         QueryHistoryRecordCommand::status)
                 .containsExactly(7L, auditedSql, "PASS", maskedRows, "SUCCESS");
+        verify(queryMetricsService).recordQueryDuration(anyLong());
     }
 
     @Test
@@ -109,18 +116,20 @@ class DataQueryServiceImplTest {
         String question = " 查询 客户 ";
         List<Map<String, Object>> maskedRows = List.of(Map.of("email", "t***@gmail.com"));
         QueryResultVO cachedResult = new QueryResultVO("查询 客户", "SELECT email FROM biz_customer",
-                maskedRows, 1, "本次查询返回 1 条数据");
+                maskedRows, 1, "本次查询返回 1 条数据", false);
         when(queryCacheService.get(7L, question)).thenReturn(Optional.of(cachedResult));
 
         QueryResultVO result = dataQueryService.query(7L, question);
 
         assertThat(result.question()).isEqualTo(question);
         assertThat(result.rows()).containsExactlyElementsOf(maskedRows);
+        assertThat(result.cacheHit()).isTrue();
         verify(queryRequestGuard).validateAndAcquire(7L, question);
         verifyNoInteractions(textToSqlService, sqlExecutionService, dataMaskingService, resultAnalysisService);
         verify(queryHistoryService).recordAsync(new QueryHistoryRecordCommand(
                 7L, question, cachedResult.sql(), "PASS", null, maskedRows, cachedResult.summary(),
                 0, "SUCCESS", null));
+        verify(queryMetricsService).recordQueryDuration(anyLong());
     }
 
     @Test

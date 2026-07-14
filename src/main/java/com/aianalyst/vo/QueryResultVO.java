@@ -12,5 +12,6 @@ public record QueryResultVO(
         @Schema(description = "审核并规范化后的只读 SQL") String sql,
         @Schema(description = "查询结果行") List<Map<String, Object>> rows,
         @Schema(description = "返回行数", example = "10") int rowCount,
-        @Schema(description = "基于脱敏数据生成的 AI 业务总结") String summary) {
+        @Schema(description = "基于脱敏数据生成的 AI 业务总结") String summary,
+        @Schema(description = "是否命中 Redis 查询缓存") boolean cacheHit) {
 }

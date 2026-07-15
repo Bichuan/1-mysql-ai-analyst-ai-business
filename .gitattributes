@@ -1,0 +1,4 @@
+# The MySQL bootstrap script runs in a Linux container and must not use CRLF line endings.
+*.sh text eol=lf
+Dockerfile text eol=lf
+compose.yaml text eol=lf

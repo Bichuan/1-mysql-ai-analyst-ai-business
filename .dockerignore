@@ -1,0 +1,10 @@
+.git
+.idea
+.vscode
+.m2
+target
+logs
+*.log
+*.iml
+.env
+src/main/resources/application-local.yml

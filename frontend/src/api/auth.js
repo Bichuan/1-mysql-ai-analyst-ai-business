@@ -1,0 +1,13 @@
+import http from './http'
+
+export function login(payload) {
+  return http.post('/auth/login', payload)
+}
+
+export function register(payload) {
+  return http.post('/auth/register', payload)
+}
+
+export function getCurrentUser() {
+  return http.get('/users/me')
+}

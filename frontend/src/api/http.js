@@ -58,6 +58,9 @@ http.interceptors.response.use(
       return Promise.reject(new Error('登录状态已过期，请重新登录'))
     }
     ElMessage.error(message)
+    // Axios 对非 2xx 响应默认只提供英文状态码。保留原始响应对象，同时统一覆盖为后端业务消息，
+    // 让页面错误态、日志定位和全局提示使用同一份可读信息。
+    error.message = message
     return Promise.reject(error)
   }
 )

@@ -116,9 +116,9 @@ docker compose logs -f app
 
 执行第一个脚本前，必须替换其中的示例密码。
 
-## 前端开发（Day17）
+## 前端开发
 
-前端采用 Vue 3 + Vite + Element Plus，提供登录、注册、JWT 会话保存和基础工作台布局。查询页与历史页会在后续 Day18、Day19 接入真实接口。
+前端采用 Vue 3 + Vite + Element Plus，已经接入登录、注册、JWT 会话、智能查询、动态结果表格和当前用户查询历史。Token 过期时会提示重新登录，并在登录成功后返回原页面。
 
 先保证后端已启动在 `http://127.0.0.1:8080/api`，再在另一个终端运行：
 
@@ -132,4 +132,7 @@ npm.cmd run dev
 
 前端只在浏览器本地保存 JWT 与用户展示信息，**不会保存用户密码**。生产环境应将前端静态文件部署到 Nginx 或由后端统一托管，并改用 HTTPS。
 
-Day20 前后端联调结果与演示步骤见 [`docs/day20-test-checklist.md`](docs/day20-test-checklist.md)。
+联调与验收记录：
+
+- Day20 自动化联调结果与演示步骤：[`docs/day20-test-checklist.md`](docs/day20-test-checklist.md)
+- Day21 浏览器联调与缺陷收口：[`docs/day21-test-report.md`](docs/day21-test-report.md)

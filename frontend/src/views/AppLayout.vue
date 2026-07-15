@@ -41,7 +41,8 @@ function logout() {
           <p class="eyebrow">ANALYTICS WORKSPACE</p>
           <h1>{{ route.meta.title || '企业数据分析工作台' }}</h1>
         </div>
-        <el-dropdown @command="logout">
+        <!-- 点击触发比默认悬停更适合触屏设备，也能让退出入口具有稳定、可测试的交互。 -->
+        <el-dropdown trigger="click" @command="logout">
           <button class="user-entry" type="button">
             <el-avatar :size="34">{{ authState.user?.nickname?.slice(0, 1) || 'U' }}</el-avatar>
             <span>

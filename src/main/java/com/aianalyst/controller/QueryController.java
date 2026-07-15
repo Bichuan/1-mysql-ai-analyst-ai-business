@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 /** AI query entry point. It only maps HTTP requests to application services. */
 @RestController
 @RequestMapping("/queries")
-@Tag(name = "AI 数据查询", description = "自然语言转 SQL；生成结果将在后续流程中审核和执行")
+@Tag(name = "AI 数据查询", description = "自然语言生成 SQL、安全审核、只读执行与 AI 结果总结")
 @SecurityRequirement(name = OpenApiConfig.BEARER_AUTH_SCHEME)
 public class QueryController {
 

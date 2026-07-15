@@ -1,5 +1,7 @@
 package com.aianalyst.common;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 /**
  * Standard response envelope for all REST APIs.
  *
@@ -8,7 +10,11 @@ package com.aianalyst.common;
  * @param data response payload
  * @param <T> response payload type
  */
-public record Result<T>(int code, String message, T data) {
+@Schema(description = "统一 API 响应结构；HTTP 状态码表示协议结果，code 表示业务结果")
+public record Result<T>(
+        @Schema(description = "业务状态码，0 表示成功", example = "0") int code,
+        @Schema(description = "面向客户端的结果说明", example = "success") String message,
+        @Schema(description = "具体响应数据；失败时通常为 null") T data) {
 
     public static <T> Result<T> success(T data) {
         return new Result<>(ResultCode.SUCCESS.getCode(), ResultCode.SUCCESS.getMessage(), data);

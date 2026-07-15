@@ -7,6 +7,7 @@ import com.aianalyst.service.QueryHistoryService;
 import com.aianalyst.vo.PageResultVO;
 import com.aianalyst.vo.QueryHistoryVO;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;
@@ -37,7 +38,9 @@ public class QueryHistoryController {
             description = "仅返回当前登录用户的审计记录摘要，不返回完整查询结果 JSON",
             security = @SecurityRequirement(name = OpenApiConfig.BEARER_AUTH_SCHEME))
     public Result<PageResultVO<QueryHistoryVO>> pageMyHistory(
+            @Parameter(description = "页码，从 1 开始", example = "1")
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于等于 1") long page,
+            @Parameter(description = "每页数量，最大 100", example = "10")
             @RequestParam(defaultValue = "10") @Min(value = 1, message = "每页数量必须大于等于 1")
             @Max(value = 100, message = "每页数量不能超过 100") long size,
             @AuthenticationPrincipal SecurityUser securityUser) {

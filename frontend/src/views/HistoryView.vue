@@ -60,12 +60,19 @@ function formatDateTime(value) {
 
 function statusType(status) {
   if (status === 'SUCCESS') return 'success'
-  if (status === 'FAILED') return 'danger'
+  if (status === 'FAIL' || status === 'FAILED') return 'danger'
   return 'warning'
 }
 
 function statusLabel(status) {
-  return { SUCCESS: '成功', FAILED: '失败', PROCESSING: '处理中' }[status] || status || '未知'
+  // 后端和数据库使用 FAIL；同时兼容早期前端曾使用的 FAILED，避免旧记录显示异常。
+  return {
+    SUCCESS: '成功',
+    FAIL: '失败',
+    FAILED: '失败',
+    AUDIT_REJECT: '安全审核拒绝',
+    PROCESSING: '处理中'
+  }[status] || status || '未知'
 }
 
 function auditType(result) {

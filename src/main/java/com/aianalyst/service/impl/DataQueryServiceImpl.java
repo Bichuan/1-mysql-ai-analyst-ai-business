@@ -71,6 +71,7 @@ public class DataQueryServiceImpl implements DataQueryService {
             // Guard 先进行意图、语义校验和限流；缓存命中也必须消耗一次额度，不能绕过流量保护。
             queryRequestGuard.validateAndAcquire(userId, question);
             Optional<QueryResultVO> cachedResult = queryCacheService.get(userId, question);
+            // 查询缓存
             if (cachedResult.isPresent()) {
                 QueryResultVO result = withCurrentQuestion(cachedResult.get(), question);
                 // 缓存命中同样是一次用户查询，需要保留审计轨迹；SQL 执行耗时为 0。
@@ -163,7 +164,8 @@ public class DataQueryServiceImpl implements DataQueryService {
             return false;
         }
         return businessException.getResultCode() == ResultCode.SQL_AUDIT_FAILED
-                || businessException.getResultCode() == ResultCode.READ_ONLY_QUERY_REQUIRED;
+                || businessException.getResultCode() == ResultCode.READ_ONLY_QUERY_REQUIRED
+                || businessException.getResultCode() == ResultCode.PROMPT_INJECTION_DETECTED;
     }
 
     private String publicErrorMessage(RuntimeException exception) {

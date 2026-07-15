@@ -29,9 +29,9 @@ public class QueryController {
     private final SqlGenerationService sqlGenerationService;
     private final DataQueryService dataQueryService;
 
-    public QueryController(SqlGenerationService sqlGenerationService, DataQueryService dataQueryService) {
-        this.sqlGenerationService = sqlGenerationService;
-        this.dataQueryService = dataQueryService;
+    public QueryController(SqlGenerationService sqlGenerationService, DataQueryService dataQueryService) { // 构造器注入，没有使用@Autowired注解
+        this.sqlGenerationService = sqlGenerationService; // 注入SQL生成服务
+        this.dataQueryService = dataQueryService; // 注入数据查询服务
     }
 
     @PostMapping("/generate-sql")

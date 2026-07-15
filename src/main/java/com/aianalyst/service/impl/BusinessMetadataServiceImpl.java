@@ -19,7 +19,8 @@ public class BusinessMetadataServiceImpl implements BusinessMetadataService {
     }
 
     @Override
-    public String buildPromptContext() {
+    public String buildPromptContext() //这个方法把 YAML 配置的元数据拼接成 AI 能读懂的文本
+    {
         StringBuilder context = new StringBuilder("可用业务表：\n");
         for (BusinessMetadataProperties.Table table : safeList(metadata.getTables())) {
             context.append("- ")

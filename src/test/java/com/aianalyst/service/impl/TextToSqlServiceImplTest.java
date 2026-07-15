@@ -4,7 +4,7 @@ import com.aianalyst.common.BusinessException;
 import com.aianalyst.common.ResultCode;
 import com.aianalyst.service.DeepSeekChatService;
 import com.aianalyst.service.SqlAuditService;
-import com.aianalyst.service.TextToSqlPromptBuilder;
+import com.aianalyst.service.prompt.TextToSqlPromptBuilder;
 import com.aianalyst.vo.SqlGenerationVO;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

@@ -69,7 +69,8 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    Q[自然语言] --> I[写操作意图拦截]
+    Q[自然语言] --> J[Prompt 注入拦截]
+    J --> I[写操作意图拦截]
     I --> P[Prompt 约束]
     P --> AST[JSqlParser AST]
     AST --> W[表白名单]
@@ -78,7 +79,7 @@ flowchart LR
     T --> RO[MySQL 只读账号]
 ```
 
-审核只接受单条 `SELECT`，拒绝多语句、未知表、`UNION`、文件读取或导出、休眠和基准测试等危险能力。正则只作为危险能力补充检查，语句类型和表引用以 AST 结果为准。
+在调用模型前，独立校验器会直接拒绝索取系统 Prompt、覆盖系统指令、角色劫持、jailbreak 和要求生成危险 DDL/DML 等攻击，避免浪费模型费用。SQL 审核只接受单条 `SELECT`，拒绝多语句、未知表、`UNION`、文件读取或导出、休眠和基准测试等危险能力。正则只作为危险能力补充检查，语句类型和表引用以 AST 结果为准。
 
 ## 6. SQL 自纠错边界
 

@@ -12,6 +12,7 @@ public enum ResultCode {
     TOO_MANY_REQUESTS(42900, "查询过于频繁，请稍后再试"),
     SQL_AUDIT_FAILED(40002, "SQL 安全审核未通过"),
     READ_ONLY_QUERY_REQUIRED(40003, "系统只支持只读数据查询，不支持数据修改操作"),
+    PROMPT_INJECTION_DETECTED(40004, "检测到试图绕过系统规则的攻击性指令"),
     SQL_EXECUTION_FAILED(50002, "数据查询执行失败，请稍后再试"),
     NOT_FOUND(40400, "请求资源不存在"),
     BUSINESS_ERROR(50001, "业务处理失败"),

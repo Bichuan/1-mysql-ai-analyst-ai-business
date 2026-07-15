@@ -28,6 +28,7 @@ import java.util.stream.Collectors;
  * 第一版只接受简单单条 SELECT，以可控性优先于复杂 SQL 表达能力。
  */
 @Service
+//安全审核
 public class SqlAuditServiceImpl implements SqlAuditService {
 
     private static final long MAX_ROW_LIMIT = 1000L;

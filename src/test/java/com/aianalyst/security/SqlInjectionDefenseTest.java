@@ -5,7 +5,7 @@ import com.aianalyst.common.ResultCode;
 import com.aianalyst.config.BusinessMetadataProperties;
 import com.aianalyst.service.BusinessMetadataService;
 import com.aianalyst.service.DeepSeekChatService;
-import com.aianalyst.service.TextToSqlPromptBuilder;
+import com.aianalyst.service.prompt.TextToSqlPromptBuilder;
 import com.aianalyst.service.impl.SqlAuditServiceImpl;
 import com.aianalyst.service.impl.TextToSqlServiceImpl;
 import org.junit.jupiter.api.BeforeEach;

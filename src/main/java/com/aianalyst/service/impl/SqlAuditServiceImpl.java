@@ -60,8 +60,7 @@ public class SqlAuditServiceImpl implements SqlAuditService {
             throw reject("只允许 SELECT 查询");
         }
 
-        PlainSelect plainSelect = select.getPlainSelect();
-        if (plainSelect == null) {
+        if (!(select.getSelectBody() instanceof PlainSelect plainSelect)) {
             throw reject("仅支持单个 SELECT 查询，不支持 UNION 等组合查询");
         }
 

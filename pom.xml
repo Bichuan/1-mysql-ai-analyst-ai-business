@@ -21,7 +21,8 @@
         <java.version>17</java.version>
         <jjwt.version>0.12.6</jjwt.version>
         <langchain4j.version>1.17.2</langchain4j.version>
-        <jsqlparser.version>4.9</jsqlparser.version>
+        <!-- MyBatis Plus 3.5.5 的分页插件基于 JSqlParser 4.6 编译，必须保持二进制兼容。 -->
+        <jsqlparser.version>4.6</jsqlparser.version>
     </properties>
 
     <dependencies>

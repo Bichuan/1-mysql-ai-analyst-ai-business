@@ -15,6 +15,7 @@ services:
       - ./sql/02_system_schema.sql:/docker-entrypoint-initdb.d/02_system_schema.sql:ro
       - ./sql/03_business_schema.sql:/docker-entrypoint-initdb.d/03_business_schema.sql:ro
       - ./sql/04_business_seed_data.sql:/docker-entrypoint-initdb.d/04_business_seed_data.sql:ro
+      - ./sql/05_conversation_context_schema.sql:/docker-entrypoint-initdb.d/05_conversation_context_schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
       interval: 10s

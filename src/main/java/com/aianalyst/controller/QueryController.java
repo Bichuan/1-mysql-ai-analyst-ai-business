@@ -51,6 +51,7 @@ public class QueryController {
             security = @SecurityRequirement(name = OpenApiConfig.BEARER_AUTH_SCHEME))
     public Result<QueryResultVO> query(@Valid @RequestBody QueryRequest request,
                                        @AuthenticationPrincipal SecurityUser securityUser) {
-        return Result.success(dataQueryService.query(securityUser.getId(), request.question()));
+        return Result.success(dataQueryService.query(
+                securityUser.getId(), request.conversationId(), request.question()));
     }
 }

@@ -26,6 +26,7 @@ public class RegexQueryIntentSafetyValidator implements QueryIntentSafetyValidat
     );
 
     @Override
+    //只读意图校验器方法，校验问题是否为只读意图
     public void validateReadOnlyIntent(String question) {
         boolean hasWriteIntent = WRITE_INTENT_PATTERNS.stream()
                 .anyMatch(pattern -> pattern.matcher(question).find());

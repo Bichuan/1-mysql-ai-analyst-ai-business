@@ -8,6 +8,7 @@ const route = useRoute()
 const question = ref('')
 const loading = ref(false)
 const result = ref(null)
+const conversationId = ref(null)
 const requestError = ref('')
 const resultSection = ref(null)
 
@@ -42,7 +43,8 @@ async function runQuery() {
   loading.value = true
   requestError.value = ''
   try {
-    result.value = await executeNaturalLanguageQuery(normalizedQuestion)
+    result.value = await executeNaturalLanguageQuery(normalizedQuestion, conversationId.value)
+    conversationId.value = result.value?.conversationId || null
     await nextTick()
     resultSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   } catch (error) {
@@ -56,6 +58,7 @@ async function runQuery() {
 function resetQuery() {
   question.value = ''
   result.value = null
+  conversationId.value = null
   requestError.value = ''
 }
 

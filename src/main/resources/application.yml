@@ -16,6 +16,12 @@ spring:
       connect-timeout: 2s
       timeout: 2s
 
+app:
+  conversation:
+    # Redis only keeps the active working set; MySQL remains the durable source of truth.
+    redis-ttl: 2h
+    recent-turn-count: 3
+
 server:
   servlet:
     context-path: /api

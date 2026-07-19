@@ -83,7 +83,7 @@ flowchart LR
 
 ## 6. SQL 自纠错边界
 
-仅当 Spring 将底层错误识别为 `BadSqlGrammarException` 时，系统才把原 SQL、截断后的错误摘要和业务元数据交给模型修复，最多两次。每次修复后的 SQL 都必须重新经过完整审核。
+系统先沿异常链检查 Spring 的 `PermissionDeniedDataAccessException`、SQLState `28xxx` 和 MySQL 权限错误码，再判断是否存在 `BadSqlGrammarException`。只有排除权限问题后的语法或字段类错误，才会把原 SQL、截断后的错误摘要和业务元数据交给模型修复，最多两次。每次修复后的 SQL 都必须重新经过完整审核。
 
 以下情况直接终止，不调用模型重试：
 
@@ -184,6 +184,7 @@ erDiagram
 
 ## 12. 后续扩展边界
 
+- 字段级白名单：第二期基于 JSqlParser AST 校验所有物理列引用，解析表别名和查询结果别名，禁止普通 `SELECT *`/`table.*`，但允许不读取具体列值的 `COUNT(*)`；字段集合继续由业务元数据 YAML 统一提供。
 - RabbitMQ：适合承担耗时分析任务、审计事件或通知，但第一期同步查询链路不依赖消息队列。
 - Nginx 与 Docker Compose：计划在 RabbitMQ 接入后统一完成完整容器部署。
 - 多租户：可在用户、元数据、缓存 Key 和业务数据源上增加 tenantId 隔离。

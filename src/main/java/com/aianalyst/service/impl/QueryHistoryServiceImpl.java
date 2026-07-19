@@ -46,15 +46,18 @@ public class QueryHistoryServiceImpl implements QueryHistoryService {
     }
 
     @Override
-    public void recordAsync(QueryHistoryRecordCommand command) {
+    public CompletableFuture<Long> recordAsync(QueryHistoryRecordCommand command) {
+        CompletableFuture<Long> result = new CompletableFuture<>();
         try {
             // 主查询结果已经生成；审计写入只能异步旁路执行，不能因为系统库短暂故障而改变接口结果。
-            CompletableFuture.runAsync(() -> persist(command), queryHistoryExecutor);
+            queryHistoryExecutor.execute(() -> result.complete(persist(command)));
         } catch (RejectedExecutionException exception) {
             queryMetricsService.recordHistoryTaskRejected();
             // 有界队列满时宁可丢弃单条非关键历史并告警，也不能让 CallerRunsPolicy 拖慢用户查询。
             log.warn("Query history task was rejected. userId={}, status={}", command.userId(), command.status());
+            result.complete(null);
         }
+        return result;
     }
 
     @Override
@@ -73,7 +76,7 @@ public class QueryHistoryServiceImpl implements QueryHistoryService {
                 historyPage.getSize(), historyPage.getPages());
     }
 
-    private void persist(QueryHistoryRecordCommand command) {
+    private Long persist(QueryHistoryRecordCommand command) {
         try {
             QueryHistory history = new QueryHistory();
             history.setUserId(command.userId());
@@ -88,10 +91,12 @@ public class QueryHistoryServiceImpl implements QueryHistoryService {
             history.setStatus(command.status());
             history.setErrorMessage(truncate(command.errorMessage(), MAX_ERROR_MESSAGE_LENGTH));
             queryHistoryMapper.insert(history);
+            return history.getId();
         } catch (Exception exception) {
             // 异步任务内部吞掉异常，保证无论使用何种 Executor 都不会影响已返回或即将返回的主查询。
             log.error("Failed to persist query history. userId={}, status={}",
                     command.userId(), command.status(), exception);
+            return null;
         }
     }
 

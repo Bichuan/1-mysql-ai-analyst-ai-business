@@ -221,3 +221,5 @@ npm.cmd run dev
 - Day24 核心 Service 单元测试与验收：[`docs/day24-test-report.md`](docs/day24-test-report.md)
 - Day25 性能基线与 SQL 注入安全验证：[`docs/day25-performance-security-report.md`](docs/day25-performance-security-report.md)
 - Day26 项目复盘与源码学习指南：[`docs/day26-project-review-study-guide.md`](docs/day26-project-review-study-guide.md)
+- Day27 五个核心技术点与面试回答：[`docs/day27-core-technical-points-interview-guide.md`](docs/day27-core-technical-points-interview-guide.md)
+- Day28 对话上下文分层存储：[`docs/day28-conversation-storage-guide.md`](docs/day28-conversation-storage-guide.md)

@@ -4,6 +4,7 @@ import com.aianalyst.common.BusinessException;
 import com.aianalyst.common.ResultCode;
 import com.aianalyst.common.SqlExecutionException;
 import com.aianalyst.dto.QueryHistoryRecordCommand;
+import com.aianalyst.service.ConversationContextService;
 import com.aianalyst.service.DataMaskingService;
 import com.aianalyst.service.DataQueryService;
 import com.aianalyst.service.QueryCacheService;
@@ -17,13 +18,17 @@ import com.aianalyst.vo.QueryResultVO;
 import com.aianalyst.vo.SqlGenerationVO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.PermissionDeniedDataAccessException;
 import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.stereotype.Service;
 
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 完整查询编排层：请求守卫 -> Redis 缓存 -> 生成 SQL -> 安全审核 -> 只读执行。
@@ -35,6 +40,20 @@ public class DataQueryServiceImpl implements DataQueryService {
     private static final Logger log = LoggerFactory.getLogger(DataQueryServiceImpl.class);
     private static final int MAX_SQL_CORRECTION_ATTEMPTS = 2;
 
+    /**
+     * MySQL 可能用 SQLState 42000 表示权限违规，Spring 又可能将其翻译为 BadSqlGrammarException；
+     * 因此必须优先识别厂商错误码，保证权限错误永远不会进入 AI 自纠错。
+     */
+    private static final Set<Integer> MYSQL_PERMISSION_DENIED_ERROR_CODES = Set.of(
+            1044, // Access denied for user to database
+            1045, // Access denied during authentication
+            1142, // Command denied for table
+            1143, // Command denied for column
+            1227, // Specific privilege is required
+            1370  // Execute command denied for stored routine
+    );
+    private static final String INVALID_AUTHORIZATION_SQL_STATE_PREFIX = "28";
+
     private final QueryRequestGuard queryRequestGuard;
     private final QueryCacheService queryCacheService;
     private final TextToSqlService textToSqlService;
@@ -43,6 +62,7 @@ public class DataQueryServiceImpl implements DataQueryService {
     private final ResultAnalysisService resultAnalysisService;
     private final QueryHistoryService queryHistoryService;
     private final QueryMetricsService queryMetricsService;
+    private final ConversationContextService conversationContextService;
 
     public DataQueryServiceImpl(QueryRequestGuard queryRequestGuard,
                                 QueryCacheService queryCacheService,
@@ -51,7 +71,8 @@ public class DataQueryServiceImpl implements DataQueryService {
                                 DataMaskingService dataMaskingService,
                                 ResultAnalysisService resultAnalysisService,
                                 QueryHistoryService queryHistoryService,
-                                QueryMetricsService queryMetricsService) {
+                                QueryMetricsService queryMetricsService,
+                                ConversationContextService conversationContextService) {
         this.queryRequestGuard = queryRequestGuard;
         this.queryCacheService = queryCacheService;
         this.textToSqlService = textToSqlService;
@@ -60,22 +81,31 @@ public class DataQueryServiceImpl implements DataQueryService {
         this.resultAnalysisService = resultAnalysisService;
         this.queryHistoryService = queryHistoryService;
         this.queryMetricsService = queryMetricsService;
+        this.conversationContextService = conversationContextService;
     }
 
     @Override
-    public QueryResultVO query(Long userId, String question) {
+    public QueryResultVO query(Long userId, String requestedConversationId, String question) {
         long queryStartedAt = System.nanoTime();
         String sql = null;
+        String conversationId = null;
         int totalSqlExecutionTime = 0;
         try {
             // Guard 先进行意图、语义校验和限流；缓存命中也必须消耗一次额度，不能绕过流量保护。
             queryRequestGuard.validateAndAcquire(userId, question);
+            // Only validated raw input may create or resume reusable conversation context.
+            conversationId = conversationContextService.openSession(
+                    userId, requestedConversationId, question);
             Optional<QueryResultVO> cachedResult = queryCacheService.get(userId, question);
             // 查询缓存
             if (cachedResult.isPresent()) {
-                QueryResultVO result = withCurrentQuestion(cachedResult.get(), question);
+                QueryResultVO result = withCurrentQuestion(cachedResult.get(), question, conversationId);
                 // 缓存命中同样是一次用户查询，需要保留审计轨迹；SQL 执行耗时为 0。
-                recordSuccess(userId, question, result.sql(), result.rows(), result.summary(), 0);
+                CompletableFuture<Long> historyIdFuture = recordSuccess(
+                        userId, question, result.sql(), result.rows(), result.summary(), 0);
+                conversationContextService.recordTurnAfterHistory(
+                        userId, conversationId, question, question, result.summary(),
+                        "SUCCESS", historyIdFuture);
                 return result;
             }
 
@@ -93,10 +123,15 @@ public class DataQueryServiceImpl implements DataQueryService {
                     String summary = resultAnalysisService.analyze(
                             generatedSql.question(), sql, maskedRows, maskedRows.size());
                     QueryResultVO result = new QueryResultVO(
-                            generatedSql.question(), sql, maskedRows, maskedRows.size(), summary, false);
+                            generatedSql.question(), sql, maskedRows, maskedRows.size(), summary, false,
+                            conversationId);
                     // 缓存只写入已审核、已执行、已脱敏且有总结的完整成功响应。
                     queryCacheService.put(userId, question, result);
-                    recordSuccess(userId, generatedSql.question(), sql, maskedRows, summary, totalSqlExecutionTime);
+                    CompletableFuture<Long> historyIdFuture = recordSuccess(
+                            userId, generatedSql.question(), sql, maskedRows, summary, totalSqlExecutionTime);
+                    conversationContextService.recordTurnAfterHistory(
+                            userId, conversationId, question, generatedSql.question(), summary,
+                            "SUCCESS", historyIdFuture);
                     return result;
                 } catch (SqlExecutionException exception) {
                     totalSqlExecutionTime = addExecutionTime(totalSqlExecutionTime, executionStartedAt);
@@ -115,7 +150,13 @@ public class DataQueryServiceImpl implements DataQueryService {
                 }
             }
         } catch (RuntimeException exception) {
-            recordFailure(userId, question, sql, totalSqlExecutionTime, exception);
+            CompletableFuture<Long> historyIdFuture = recordFailure(
+                    userId, question, sql, totalSqlExecutionTime, exception);
+            if (conversationId != null) {
+                conversationContextService.recordTurnAfterHistory(
+                        userId, conversationId, question, question, publicErrorMessage(exception),
+                        "FAIL", historyIdFuture);
+            }
             throw exception;
         } finally {
             // 无论成功、缓存命中或被安全规则拒绝，都记录端到端耗时，便于发现慢查询和外部模型抖动。
@@ -123,30 +164,32 @@ public class DataQueryServiceImpl implements DataQueryService {
         }
     }
 
-    private QueryResultVO withCurrentQuestion(QueryResultVO cachedResult, String question) {
+    private QueryResultVO withCurrentQuestion(QueryResultVO cachedResult,
+                                              String question,
+                                              String conversationId) {
         // 缓存 Key 会归一化空白和大小写，但响应应回显用户本次实际输入，而非第一次写入缓存时的文本。
         return new QueryResultVO(question, cachedResult.sql(), cachedResult.rows(),
-                cachedResult.rowCount(), cachedResult.summary(), true);
+                cachedResult.rowCount(), cachedResult.summary(), true, conversationId);
     }
 
-    private void recordSuccess(Long userId,
-                               String question,
-                               String sql,
-                               List<Map<String, Object>> maskedRows,
-                               String summary,
-                               int executionTime) {
-        queryHistoryService.recordAsync(new QueryHistoryRecordCommand(
+    private CompletableFuture<Long> recordSuccess(Long userId,
+                                                  String question,
+                                                  String sql,
+                                                  List<Map<String, Object>> maskedRows,
+                                                  String summary,
+                                                  int executionTime) {
+        return queryHistoryService.recordAsync(new QueryHistoryRecordCommand(
                 userId, question, sql, "PASS", null, maskedRows, summary,
                 executionTime, "SUCCESS", null));
     }
 
-    private void recordFailure(Long userId,
-                               String question,
-                               String sql,
-                               int executionTime,
-                               RuntimeException exception) {
+    private CompletableFuture<Long> recordFailure(Long userId,
+                                                  String question,
+                                                  String sql,
+                                                  int executionTime,
+                                                  RuntimeException exception) {
         boolean auditRejected = isAuditRejection(exception);
-        queryHistoryService.recordAsync(new QueryHistoryRecordCommand(
+        return queryHistoryService.recordAsync(new QueryHistoryRecordCommand(
                 userId,
                 question,
                 sql,
@@ -185,8 +228,37 @@ public class DataQueryServiceImpl implements DataQueryService {
     }
 
     private boolean isCorrectableSyntaxFailure(SqlExecutionException exception) {
-        // Spring 会把字段不存在、语法不合法等 MySQL 错误转换为 BadSqlGrammarException。
-        return exception.getCause() instanceof BadSqlGrammarException;
+        // 权限错误优先否决：部分 MySQL 42000 错误也会被 Spring 包装成 BadSqlGrammarException。
+        if (containsPermissionDeniedCause(exception)) {
+            return false;
+        }
+        // 字段不存在、可解析但数据库不接受的语法等错误，才允许交给模型修复。
+        return containsCause(exception, BadSqlGrammarException.class);
+    }
+
+    private boolean containsPermissionDeniedCause(Throwable throwable) {
+        for (Throwable current = throwable; current != null; current = current.getCause()) {
+            if (current instanceof PermissionDeniedDataAccessException) {
+                return true;
+            }
+            if (current instanceof SQLException sqlException) {
+                String sqlState = sqlException.getSQLState();
+                if ((sqlState != null && sqlState.startsWith(INVALID_AUTHORIZATION_SQL_STATE_PREFIX))
+                        || MYSQL_PERMISSION_DENIED_ERROR_CODES.contains(sqlException.getErrorCode())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean containsCause(Throwable throwable, Class<? extends Throwable> expectedType) {
+        for (Throwable current = throwable; current != null; current = current.getCause()) {
+            if (expectedType.isInstance(current)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String correctionErrorMessage(SqlExecutionException exception) {

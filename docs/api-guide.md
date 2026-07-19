@@ -82,9 +82,12 @@ Bearer <accessToken>
 
 ```json
 {
-  "question": "查询今年销售额最高的10个客户"
+  "question": "查询今年销售额最高的10个客户",
+  "conversationId": "7bc58b98-9b9d-4f6f-9fa5-429d94f2ee4a"
 }
 ```
+
+`conversationId` 可选。第一次不传时由后端创建并通过响应中的 `data.conversationId` 返回；后续问题携带相同值即可进入同一个会话。
 
 响应包含：
 
@@ -93,7 +96,8 @@ Bearer <accessToken>
 - `rows`：脱敏后的动态查询结果；
 - `rowCount`：返回行数；
 - `summary`：基于脱敏数据生成的 AI 总结；
-- `cacheHit`：是否命中 Redis 缓存。
+- `cacheHit`：是否命中 Redis 缓存；
+- `conversationId`：服务端确认的会话 UUID；其所有权始终根据 JWT 用户校验。
 
 再次提交相同用户的相同问题，可以观察 `cacheHit` 变为 `true`。
 

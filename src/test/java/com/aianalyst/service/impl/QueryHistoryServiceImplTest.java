@@ -25,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -48,7 +49,13 @@ class QueryHistoryServiceImplTest {
                 List.of(Map.of("email", "t***@gmail.com", "customer_name", "客户A")),
                 "本次查询返回 1 条客户数据", 12, "SUCCESS", null);
 
-        service.recordAsync(command);
+        doAnswer(invocation -> {
+            QueryHistory history = invocation.getArgument(0);
+            history.setId(99L);
+            return 1;
+        }).when(queryHistoryMapper).insert(any(QueryHistory.class));
+
+        Long historyId = service.recordAsync(command).join();
 
         ArgumentCaptor<QueryHistory> historyCaptor = ArgumentCaptor.forClass(QueryHistory.class);
         verify(queryHistoryMapper).insert(historyCaptor.capture());
@@ -58,6 +65,7 @@ class QueryHistoryServiceImplTest {
                 .doesNotContain("test@gmail.com");
         assertThat(history.getStatus()).isEqualTo("SUCCESS");
         assertThat(history.getExecutionTime()).isEqualTo(12);
+        assertThat(historyId).isEqualTo(99L);
     }
 
     @Test

@@ -4,6 +4,7 @@ import com.aianalyst.common.BusinessException;
 import com.aianalyst.common.ResultCode;
 import com.aianalyst.common.SqlExecutionException;
 import com.aianalyst.dto.QueryHistoryRecordCommand;
+import com.aianalyst.service.ConversationContextService;
 import com.aianalyst.service.DataMaskingService;
 import com.aianalyst.service.QueryCacheService;
 import com.aianalyst.service.QueryHistoryService;
@@ -16,6 +17,8 @@ import com.aianalyst.vo.QueryResultVO;
 import com.aianalyst.vo.SqlGenerationVO;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -27,9 +30,11 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -64,6 +69,9 @@ class DataQueryServiceImplTest {
 
     @Mock
     private QueryMetricsService queryMetricsService;
+
+    @Mock
+    private ConversationContextService conversationContextService;
 
     @InjectMocks
     private DataQueryServiceImpl dataQueryService;
@@ -133,6 +141,27 @@ class DataQueryServiceImplTest {
     }
 
     @Test
+    void shouldReturnAndRecordTheResolvedConversationId() {
+        String conversationId = "7bc58b98-9b9d-4f6f-9fa5-429d94f2ee4a";
+        String question = "查询客户";
+        QueryResultVO cachedResult = new QueryResultVO(
+                question, "SELECT id FROM biz_customer", List.of(), 0, "没有数据", false);
+        CompletableFuture<Long> historyIdFuture = CompletableFuture.completedFuture(88L);
+        when(conversationContextService.openSession(7L, conversationId, question))
+                .thenReturn(conversationId);
+        when(queryCacheService.get(7L, question)).thenReturn(Optional.of(cachedResult));
+        when(queryHistoryService.recordAsync(any(QueryHistoryRecordCommand.class)))
+                .thenReturn(historyIdFuture);
+
+        QueryResultVO result = dataQueryService.query(7L, conversationId, question);
+
+        assertThat(result.conversationId()).isEqualTo(conversationId);
+        verify(conversationContextService).recordTurnAfterHistory(
+                7L, conversationId, question, question, "没有数据", "SUCCESS",
+                historyIdFuture);
+    }
+
+    @Test
     void shouldCorrectBadSqlGrammarAndExecuteCorrectedSql() {
         String question = "查询前一个客户";
         String failedSql = "SELECT customer_nam FROM biz_customer LIMIT 5";
@@ -141,7 +170,8 @@ class DataQueryServiceImplTest {
         List<Map<String, Object>> maskedRows = List.of(Map.of("customer_name", "客*1"));
         String summary = "共返回 1 条客户数据。";
         SqlExecutionException syntaxFailure = new SqlExecutionException(failedSql,
-                new BadSqlGrammarException("query", failedSql, new SQLException("Unknown column 'customer_nam'")));
+                new BadSqlGrammarException("query", failedSql,
+                        new SQLException("Unknown column 'customer_nam'", "42S22", 1054)));
         when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
         when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, failedSql));
         when(sqlExecutionService.executeAuditedSelect(failedSql)).thenThrow(syntaxFailure);
@@ -180,6 +210,28 @@ class DataQueryServiceImplTest {
                         QueryHistoryRecordCommand::status,
                         QueryHistoryRecordCommand::errorMessage)
                 .containsExactly(sql, "PASS", "FAIL", ResultCode.SQL_EXECUTION_FAILED.getMessage());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "42000, 1142",
+            "28000, 0"
+    })
+    void shouldNotCorrectPermissionFailureEvenWhenTranslatedAsBadSqlGrammar(String sqlState, int errorCode) {
+        String question = "查询前一个客户";
+        String sql = "SELECT customer_name FROM biz_customer LIMIT 5";
+        SQLException permissionDenied = new SQLException("SELECT command denied", sqlState, errorCode);
+        SqlExecutionException failure = new SqlExecutionException(sql,
+                new BadSqlGrammarException("query", sql, permissionDenied));
+        when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
+        when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, sql));
+        when(sqlExecutionService.executeAuditedSelect(sql)).thenThrow(failure);
+
+        assertThatThrownBy(() -> dataQueryService.query(7L, question))
+                .isSameAs(failure);
+
+        verify(textToSqlService, never()).correctSql(anyString(), anyString(), anyString());
+        verify(queryCacheService, never()).put(eq(7L), eq(question), any(QueryResultVO.class));
     }
 
     @Test
@@ -252,6 +304,7 @@ class DataQueryServiceImplTest {
 
     private SqlExecutionException badSqlGrammarFailure(String sql) {
         return new SqlExecutionException(sql,
-                new BadSqlGrammarException("query", sql, new SQLException("Unknown column in " + sql)));
+                new BadSqlGrammarException("query", sql,
+                        new SQLException("Unknown column in " + sql, "42S22", 1054)));
     }
 }

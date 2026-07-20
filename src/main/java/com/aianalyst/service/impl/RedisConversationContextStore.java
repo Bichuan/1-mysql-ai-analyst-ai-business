@@ -27,15 +27,49 @@ public class RedisConversationContextStore {
     private static final Logger log = LoggerFactory.getLogger(RedisConversationContextStore.class);
 
     private static final DefaultRedisScript<Long> APPEND_TURN_SCRIPT = new DefaultRedisScript<>("""
+            if redis.call('EXISTS', KEYS[1]) == 0 then
+                return -1
+            end
+            local currentVersion = redis.call('HGET', KEYS[1], 'version')
+            if not currentVersion or tostring(currentVersion) ~= tostring(ARGV[1]) then
+                return 0
+            end
             redis.call('HSET', KEYS[1],
-                'currentTurn', ARGV[1],
+                'currentTurn', ARGV[3],
                 'version', ARGV[2],
-                'lastActiveTime', ARGV[3])
-            redis.call('RPUSH', KEYS[2], ARGV[4])
-            redis.call('LTRIM', KEYS[2], -tonumber(ARGV[5]), -1)
-            redis.call('EXPIRE', KEYS[1], ARGV[6])
-            redis.call('EXPIRE', KEYS[2], ARGV[6])
-            return redis.call('LLEN', KEYS[2])
+                'estimatedTokens', ARGV[4],
+                'lastActiveTime', ARGV[5])
+            redis.call('RPUSH', KEYS[2], ARGV[6])
+            redis.call('EXPIRE', KEYS[1], ARGV[7])
+            redis.call('EXPIRE', KEYS[2], ARGV[7])
+            return 1
+            """, Long.class);
+
+    private static final DefaultRedisScript<Long> UPDATE_CONTEXT_SCRIPT = new DefaultRedisScript<>("""
+            if redis.call('EXISTS', KEYS[1]) == 0 then
+                return -1
+            end
+            local currentVersion = redis.call('HGET', KEYS[1], 'version')
+            if not currentVersion or tostring(currentVersion) ~= tostring(ARGV[1]) then
+                return 0
+            end
+            redis.call('HSET', KEYS[1],
+                'rollingSummary', ARGV[3],
+                'summaryUntilTurn', ARGV[4],
+                'structuredState', ARGV[5],
+                'estimatedTokens', ARGV[6],
+                'version', ARGV[2],
+                'lastActiveTime', ARGV[9])
+            if ARGV[8] == '1' then
+                redis.call('DEL', KEYS[2])
+            elseif tonumber(ARGV[7]) > 0 then
+                redis.call('LTRIM', KEYS[2], tonumber(ARGV[7]), -1)
+            end
+            redis.call('EXPIRE', KEYS[1], ARGV[10])
+            if redis.call('EXISTS', KEYS[2]) == 1 then
+                redis.call('EXPIRE', KEYS[2], ARGV[10])
+            end
+            return 1
             """, Long.class);
 
     private static final DefaultRedisScript<Long> RESTORE_SCRIPT = new DefaultRedisScript<>("""
@@ -88,6 +122,7 @@ public class RedisConversationContextStore {
             }
             if (!String.valueOf(userId).equals(stringValue(metadata.get("userId")))) {
                 log.warn("Conversation cache ownership metadata is invalid. key={}", metaKey);
+                evict(userId, conversationId);
                 return Optional.empty();
             }
 
@@ -99,6 +134,7 @@ public class RedisConversationContextStore {
                     nullIfBlank(stringValue(metadata.get("structuredState"))),
                     longValue(metadata.get("currentTurn")),
                     longValue(metadata.get("version")),
+                    integerValue(metadata.get("estimatedTokens")),
                     turns));
         } catch (RuntimeException exception) {
             log.warn("Conversation cache read failed; MySQL fallback will be used. key={}, cause={}",
@@ -151,22 +187,73 @@ public class RedisConversationContextStore {
     public void appendSuccessfulTurn(Long userId,
                                      String conversationId,
                                      ConversationTurnSnapshot turn,
-                                     long version) {
+                                     long version,
+                                     int estimatedTokens) {
         String metaKey = metaKey(userId, conversationId);
         String turnsKey = turnsKey(userId, conversationId);
         try {
-            redisTemplate.execute(
+            Long updated = redisTemplate.execute(
                     APPEND_TURN_SCRIPT,
                     List.of(metaKey, turnsKey),
-                    String.valueOf(turn.turnId()),
+                    String.valueOf(version - 1),
                     String.valueOf(version),
+                    String.valueOf(turn.turnId()),
+                    String.valueOf(Math.max(0, estimatedTokens)),
                     formatTime(LocalDateTime.now()),
                     serialize(turn),
-                    String.valueOf(properties.getRecentTurnCount()),
                     String.valueOf(properties.getRedisTtl().toSeconds()));
+            if (!Long.valueOf(1L).equals(updated)) {
+                // A concurrent request wrote a newer version first, or this hot copy missed an
+                // intermediate update. Rebuild from MySQL instead of accepting an out-of-order list.
+                evict(userId, conversationId);
+            }
         } catch (RuntimeException exception) {
             log.warn("Conversation cache append failed; durable messages remain in MySQL. key={}, cause={}",
                     metaKey, exception.getClass().getSimpleName());
+        }
+    }
+
+    public boolean updateContext(Long userId,
+                                 String conversationId,
+                                 long expectedVersion,
+                                 long newVersion,
+                                 String rollingSummary,
+                                 long summaryUntilTurn,
+                                 String structuredState,
+                                 int estimatedTokens,
+                                 int removeOldestTurns,
+                                 boolean clearRecentTurns) {
+        String metaKey = metaKey(userId, conversationId);
+        String turnsKey = turnsKey(userId, conversationId);
+        try {
+            Long updated = redisTemplate.execute(
+                    UPDATE_CONTEXT_SCRIPT,
+                    List.of(metaKey, turnsKey),
+                    String.valueOf(expectedVersion),
+                    String.valueOf(newVersion),
+                    valueOrEmpty(rollingSummary),
+                    String.valueOf(summaryUntilTurn),
+                    valueOrEmpty(structuredState),
+                    String.valueOf(Math.max(0, estimatedTokens)),
+                    String.valueOf(removeOldestTurns),
+                    clearRecentTurns ? "1" : "0",
+                    formatTime(LocalDateTime.now()),
+                    String.valueOf(properties.getRedisTtl().toSeconds()));
+            return Long.valueOf(1L).equals(updated);
+        } catch (RuntimeException exception) {
+            log.warn("Conversation cache state update failed. key={}, cause={}",
+                    metaKey, exception.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    public void evict(Long userId, String conversationId) {
+        try {
+            redisTemplate.delete(List.of(
+                    metaKey(userId, conversationId), turnsKey(userId, conversationId)));
+        } catch (RuntimeException exception) {
+            log.warn("Conversation cache eviction failed. conversationId={}, cause={}",
+                    conversationId, exception.getClass().getSimpleName());
         }
     }
 
@@ -184,8 +271,9 @@ public class RedisConversationContextStore {
     }
 
     private List<ConversationTurnSnapshot> readTurns(Long userId, String conversationId) {
+        // A fourth item may exist briefly until its predecessor is safely merged into the summary.
         List<String> values = redisTemplate.opsForList().range(
-                turnsKey(userId, conversationId), -properties.getRecentTurnCount(), -1);
+                turnsKey(userId, conversationId), 0, -1);
         if (values == null || values.isEmpty()) {
             return List.of();
         }
@@ -232,6 +320,13 @@ public class RedisConversationContextStore {
             return 0L;
         }
         return Long.parseLong(String.valueOf(value));
+    }
+
+    private int integerValue(Object value) {
+        if (value == null || !StringUtils.hasText(String.valueOf(value))) {
+            return 0;
+        }
+        return Math.max(0, Integer.parseInt(String.valueOf(value)));
     }
 
     private long safeLong(Long value) {

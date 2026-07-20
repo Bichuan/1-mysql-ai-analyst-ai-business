@@ -69,10 +69,12 @@ class ConversationPersistenceServiceTest {
 
         ConversationPersistenceService.PersistedTurn persisted = service.appendTurn(
                 7L, session.getConversationId(), "那华东呢？", "查询华东销售额",
-                "华东销售额为100万元", 99L, "SUCCESS");
+                "华东销售额为100万元", 99L, "SUCCESS", 18, 12);
 
         assertThat(persisted.turn().turnId()).isEqualTo(3L);
         assertThat(persisted.version()).isEqualTo(5L);
+        assertThat(persisted.estimatedTokens()).isEqualTo(30);
+        assertThat(session.getEstimatedTokens()).isEqualTo(30);
         verify(sessionMapper).updateById(session);
 
         ArgumentCaptor<ConversationMessage> messageCaptor = ArgumentCaptor.forClass(ConversationMessage.class);
@@ -82,8 +84,10 @@ class ConversationPersistenceServiceTest {
                 .containsExactly("USER", "ASSISTANT");
         assertThat(messages.get(0).getOriginalContent()).isEqualTo("那华东呢？");
         assertThat(messages.get(0).getStandaloneQuestion()).isEqualTo("查询华东销售额");
+        assertThat(messages.get(0).getEstimatedTokens()).isEqualTo(18);
         assertThat(messages.get(1).getAnswerSummary()).isEqualTo("华东销售额为100万元");
         assertThat(messages.get(1).getQueryHistoryId()).isEqualTo(99L);
+        assertThat(messages.get(1).getEstimatedTokens()).isEqualTo(12);
     }
 
     private ConversationSession session(Long id, Long userId, Long currentTurn, Long version) {

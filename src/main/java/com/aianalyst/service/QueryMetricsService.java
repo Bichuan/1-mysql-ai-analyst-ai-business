@@ -11,5 +11,11 @@ public interface QueryMetricsService {
 
     void recordHistoryTaskRejected();
 
+    void recordModelPromptTokens(int estimatedTokens);
+
+    void recordTokenCompression();
+
+    void recordTokenBudgetRejected();
+
     void recordQueryDuration(long durationNanos);
 }

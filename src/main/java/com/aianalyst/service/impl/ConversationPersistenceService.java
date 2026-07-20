@@ -88,7 +88,9 @@ public class ConversationPersistenceService {
                                     String standaloneQuestion,
                                     String answerSummary,
                                     Long queryHistoryId,
-                                    String status) {
+                                    String status,
+                                    int userEstimatedTokens,
+                                    int assistantEstimatedTokens) {
         ConversationSession session = sessionMapper.selectOwnedForUpdate(userId, conversationId);
         if (session == null) {
             throw new BusinessException(ResultCode.NOT_FOUND, "会话不存在或已失效");
@@ -100,6 +102,12 @@ public class ConversationPersistenceService {
 
         session.setCurrentTurn(turnId);
         session.setVersion(version);
+        int contextEstimatedTokens = safeInteger(session.getEstimatedTokens());
+        if ("SUCCESS".equals(status)) {
+            contextEstimatedTokens = saturatedAdd(
+                    contextEstimatedTokens, userEstimatedTokens, assistantEstimatedTokens);
+        }
+        session.setEstimatedTokens(contextEstimatedTokens);
         session.setLastActiveAt(now);
         session.setUpdatedAt(now);
         sessionMapper.updateById(session);
@@ -111,6 +119,7 @@ public class ConversationPersistenceService {
         userMessage.setOriginalContent(originalQuestion);
         userMessage.setStandaloneQuestion(standaloneQuestion);
         userMessage.setStatus(status);
+        userMessage.setEstimatedTokens(userEstimatedTokens);
         userMessage.setCreatedAt(now);
         messageMapper.insert(userMessage);
 
@@ -121,21 +130,30 @@ public class ConversationPersistenceService {
         assistantMessage.setAnswerSummary(answerSummary);
         assistantMessage.setQueryHistoryId(queryHistoryId);
         assistantMessage.setStatus(status);
+        assistantMessage.setEstimatedTokens(assistantEstimatedTokens);
         assistantMessage.setCreatedAt(now);
         messageMapper.insert(assistantMessage);
 
         ConversationTurnSnapshot turn = new ConversationTurnSnapshot(
                 turnId, originalQuestion, standaloneQuestion, answerSummary,
                 queryHistoryId, status, now);
-        return new PersistedTurn(turn, version);
+        return new PersistedTurn(
+                turn, version, assistantMessage.getId(), contextEstimatedTokens);
     }
 
     public List<ConversationTurnSnapshot> loadRecentSuccessfulTurns(Long sessionId, int turnCount) {
+        return loadRecentSuccessfulTurns(sessionId, 0L, turnCount);
+    }
+
+    public List<ConversationTurnSnapshot> loadRecentSuccessfulTurns(Long sessionId,
+                                                                    long afterTurnExclusive,
+                                                                    int turnCount) {
         int messageLimit = turnCount * 2;
         List<ConversationMessage> messages = messageMapper.selectList(
                 Wrappers.<ConversationMessage>lambdaQuery()
                         .eq(ConversationMessage::getSessionId, sessionId)
                         .eq(ConversationMessage::getStatus, "SUCCESS")
+                        .gt(ConversationMessage::getTurnId, afterTurnExclusive)
                         .orderByDesc(ConversationMessage::getTurnId)
                         .orderByDesc(ConversationMessage::getId)
                         .last("LIMIT " + messageLimit));
@@ -163,6 +181,25 @@ public class ConversationPersistenceService {
                 .toList();
     }
 
+    public boolean compareAndSetContextState(Long userId,
+                                             String conversationId,
+                                             long expectedVersion,
+                                             String rollingSummary,
+                                             long summaryUntilTurn,
+                                             String structuredState,
+                                             int estimatedTokens) {
+        return sessionMapper.compareAndSetContextState(
+                userId, conversationId, expectedVersion, rollingSummary,
+                summaryUntilTurn, structuredState, estimatedTokens) == 1;
+    }
+
+    public void linkQueryHistory(Long assistantMessageId, Long queryHistoryId) {
+        if (assistantMessageId == null || queryHistoryId == null) {
+            return;
+        }
+        messageMapper.linkQueryHistory(assistantMessageId, queryHistoryId);
+    }
+
     private void touch(ConversationSession session) {
         LocalDateTime now = LocalDateTime.now();
         session.setLastActiveAt(now);
@@ -178,6 +215,16 @@ public class ConversationPersistenceService {
 
     private long safeLong(Long value) {
         return value == null ? 0L : value;
+    }
+
+    private int safeInteger(Integer value) {
+        return value == null ? 0 : Math.max(0, value);
+    }
+
+    private int saturatedAdd(int first, int second, int third) {
+        return (int) Math.min(
+                Integer.MAX_VALUE,
+                (long) Math.max(0, first) + Math.max(0, second) + Math.max(0, third));
     }
 
     private String truncate(String value, int maxLength) {
@@ -201,6 +248,9 @@ public class ConversationPersistenceService {
     }
 
     /** The committed turn plus the session version produced by the same row-locked transaction. */
-    public record PersistedTurn(ConversationTurnSnapshot turn, long version) {
+    public record PersistedTurn(ConversationTurnSnapshot turn,
+                                long version,
+                                Long assistantMessageId,
+                                int estimatedTokens) {
     }
 }

@@ -83,16 +83,16 @@ flowchart LR
 
 ## 6. SQL 自纠错边界
 
-系统先沿异常链检查 Spring 的 `PermissionDeniedDataAccessException`、SQLState `28xxx` 和 MySQL 权限错误码，再判断是否存在 `BadSqlGrammarException`。只有排除权限问题后的语法或字段类错误，才会把原 SQL、截断后的错误摘要和业务元数据交给模型修复，最多两次。每次修复后的 SQL 都必须重新经过完整审核。
+系统使用一个共享的两次纠错预算。模型首次输出若仅因“多语句”或“SQL 无法解析”等输出格式问题被审核拒绝，可以消耗一次额度重新生成单条 `SELECT`；不得简单截取第一条语句，修复结果仍须重新经过完整审核。进入数据库执行后，系统先沿异常链检查 Spring 的 `PermissionDeniedDataAccessException`、SQLState `28xxx` 和 MySQL 权限错误码，再判断是否存在 `BadSqlGrammarException`。只有排除权限问题后的语法或字段类错误，才能使用剩余纠错额度。
 
 以下情况直接终止，不调用模型重试：
 
-- 安全审核不通过；
+- 未授权表、非 `SELECT`、危险函数、文件导出、`UNION` 等安全审核拒绝；
 - 数据库连接失败或查询超时；
 - 权限不足；
 - 非语法类数据访问异常。
 
-这样可以防止无限重试、模型费用失控，以及使用“纠错流程”绕过安全审核。
+格式审核纠错最多一次，审核与执行纠错合计最多两次。这样可以防止无限重试、模型费用失控，以及使用“纠错流程”绕过安全审核。
 
 ## 7. Redis 设计
 
@@ -100,6 +100,8 @@ flowchart LR
 |---|---|---|
 | 用户查询限流 | `rate_limit:{userId}` | Lua 原子执行，固定窗口每分钟 5 次 |
 | 查询结果缓存 | `query_cache:v1:{userId}:{questionHash}` | 用户隔离，问题归一化，TTL 30 分钟 |
+| 会话状态 | `conversation:v1:{userId:conversationId}:meta` | Hash 保存摘要、状态、版本和 Token 估算 |
+| 最近成功轮次 | `conversation:v1:{userId:conversationId}:turns` | List 保存最近 3 轮，Lua 版本 CAS 更新 |
 
 缓存内容是已审核、已执行、已脱敏并包含 AI 总结的完整响应。Redis 不可用时，查询缓存会降级为正常查询流程；限流属于费用与流量保护，不静默放行。
 
@@ -113,6 +115,10 @@ flowchart LR
 - `query_history` 审计记录。
 
 为控制模型上下文和费用，结果总结最多采样 100 行、序列化内容最多约 12000 个字符。
+
+### 8.1 Token 预算与压力压缩
+
+所有模型调用都会本地估算完整 Prompt Token，并把最大输出和安全余量计入预算。默认模型窗口按 32768 Token 保守配置，超过 80% 前先压缩滚动摘要和即将离开窗口的早期轮次；压缩结果先通过 MySQL 乐观锁保存，再由 Redis Lua 原子裁剪。重新估算后仍超限则拒绝调用，不静默截断最近轮次。`conversation_session.estimated_tokens` 保存可复用上下文数据估算，真实调用仍以完整 Prompt 的即时估算为准。
 
 ## 9. 并发与审计历史
 
@@ -180,7 +186,7 @@ erDiagram
 - Actuator 暴露健康状态和 Micrometer 指标。
 - 普通用户只能匿名查看不含内部细节的健康状态。
 - `/actuator/metrics/**` 只允许 `ADMIN` 访问。
-- 指标覆盖查询总量、成功/失败、缓存命中、请求耗时以及历史线程池活跃数和队列长度。
+- 指标覆盖查询总量、成功/失败、缓存命中、请求耗时、历史线程池状态，以及模型 Prompt Token 估算、上下文压缩和预算拒绝次数。
 
 ## 12. 后续扩展边界
 

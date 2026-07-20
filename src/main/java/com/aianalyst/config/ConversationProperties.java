@@ -10,6 +10,7 @@ public class ConversationProperties {
 
     private Duration redisTtl = Duration.ofHours(2);
     private int recentTurnCount = 3;
+    private int rollingSummaryTargetTokens = 1_024;
 
     public Duration getRedisTtl() {
         return redisTtl;
@@ -31,5 +32,17 @@ public class ConversationProperties {
             throw new IllegalArgumentException("app.conversation.recent-turn-count must be between 3 and 5");
         }
         this.recentTurnCount = recentTurnCount;
+    }
+
+    public int getRollingSummaryTargetTokens() {
+        return rollingSummaryTargetTokens;
+    }
+
+    public void setRollingSummaryTargetTokens(int rollingSummaryTargetTokens) {
+        if (rollingSummaryTargetTokens < 128 || rollingSummaryTargetTokens > 4_096) {
+            throw new IllegalArgumentException(
+                    "app.conversation.rolling-summary-target-tokens must be between 128 and 4096");
+        }
+        this.rollingSummaryTargetTokens = rollingSummaryTargetTokens;
     }
 }

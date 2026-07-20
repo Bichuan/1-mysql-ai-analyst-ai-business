@@ -3,6 +3,7 @@ package com.aianalyst.service.impl;
 import com.aianalyst.service.QueryMetricsService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -21,6 +22,9 @@ public class MicrometerQueryMetricsService implements QueryMetricsService {
     private final Counter cacheMissCounter;
     private final Counter cacheFallbackCounter;
     private final Counter historyTaskRejectedCounter;
+    private final Counter tokenCompressionCounter;
+    private final Counter tokenBudgetRejectedCounter;
+    private final DistributionSummary modelPromptTokens;
     private final Timer queryDurationTimer;
 
     public MicrometerQueryMetricsService(MeterRegistry meterRegistry,
@@ -29,6 +33,11 @@ public class MicrometerQueryMetricsService implements QueryMetricsService {
         this.cacheMissCounter = Counter.builder("ai.query.cache.miss").register(meterRegistry);
         this.cacheFallbackCounter = Counter.builder("ai.query.cache.fallback").register(meterRegistry);
         this.historyTaskRejectedCounter = Counter.builder("ai.query.history.task.rejected").register(meterRegistry);
+        this.tokenCompressionCounter = Counter.builder("ai.model.token.budget.compression").register(meterRegistry);
+        this.tokenBudgetRejectedCounter = Counter.builder("ai.model.token.budget.rejected").register(meterRegistry);
+        this.modelPromptTokens = DistributionSummary.builder("ai.model.prompt.tokens.estimated")
+                .baseUnit("tokens")
+                .register(meterRegistry);
         this.queryDurationTimer = Timer.builder("ai.query.request.duration").register(meterRegistry);
 
         // Gauge 直接读取线程池瞬时状态，不需要额外维护容易失真的计数器。
@@ -56,6 +65,21 @@ public class MicrometerQueryMetricsService implements QueryMetricsService {
     @Override
     public void recordHistoryTaskRejected() {
         historyTaskRejectedCounter.increment();
+    }
+
+    @Override
+    public void recordModelPromptTokens(int estimatedTokens) {
+        modelPromptTokens.record(Math.max(0, estimatedTokens));
+    }
+
+    @Override
+    public void recordTokenCompression() {
+        tokenCompressionCounter.increment();
+    }
+
+    @Override
+    public void recordTokenBudgetRejected() {
+        tokenBudgetRejectedCounter.increment();
     }
 
     @Override

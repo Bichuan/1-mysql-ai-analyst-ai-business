@@ -2,6 +2,9 @@ package com.aianalyst.service.impl;
 
 import com.aianalyst.config.DeepSeekProperties;
 import com.aianalyst.service.DeepSeekChatService;
+import com.aianalyst.service.QueryMetricsService;
+import com.aianalyst.service.TokenBudgetService;
+import com.aianalyst.dto.TokenBudgetAssessment;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.springframework.stereotype.Service;
@@ -15,10 +18,16 @@ import org.springframework.util.StringUtils;
 public class DeepSeekChatServiceImpl implements DeepSeekChatService {
 
     private final DeepSeekProperties properties;
+    private final TokenBudgetService tokenBudgetService;
+    private final QueryMetricsService queryMetricsService;
     private volatile ChatModel chatModel;
 
-    public DeepSeekChatServiceImpl(DeepSeekProperties properties) {
+    public DeepSeekChatServiceImpl(DeepSeekProperties properties,
+                                   TokenBudgetService tokenBudgetService,
+                                   QueryMetricsService queryMetricsService) {
         this.properties = properties;
+        this.tokenBudgetService = tokenBudgetService;
+        this.queryMetricsService = queryMetricsService;
     }
 
     @Override
@@ -26,6 +35,14 @@ public class DeepSeekChatServiceImpl implements DeepSeekChatService {
         if (!StringUtils.hasText(prompt)) {
             throw new IllegalArgumentException("prompt must not be blank");
         }
+        TokenBudgetAssessment assessment;
+        try {
+            assessment = tokenBudgetService.requireWithinBudget(prompt);
+        } catch (RuntimeException exception) {
+            queryMetricsService.recordTokenBudgetRejected();
+            throw exception;
+        }
+        queryMetricsService.recordModelPromptTokens(assessment.estimatedPromptTokens());
         return getChatModel().chat(prompt);
     }
 

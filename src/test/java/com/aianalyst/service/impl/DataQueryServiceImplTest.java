@@ -4,7 +4,10 @@ import com.aianalyst.common.BusinessException;
 import com.aianalyst.common.ResultCode;
 import com.aianalyst.common.SqlExecutionException;
 import com.aianalyst.dto.QueryHistoryRecordCommand;
+import com.aianalyst.dto.ResolvedConversationQuestion;
+import com.aianalyst.dto.SqlGenerationOutcome;
 import com.aianalyst.service.ConversationContextService;
+import com.aianalyst.service.ConversationQuestionResolver;
 import com.aianalyst.service.DataMaskingService;
 import com.aianalyst.service.QueryCacheService;
 import com.aianalyst.service.QueryHistoryService;
@@ -15,6 +18,7 @@ import com.aianalyst.service.SqlExecutionService;
 import com.aianalyst.service.TextToSqlService;
 import com.aianalyst.vo.QueryResultVO;
 import com.aianalyst.vo.SqlGenerationVO;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -38,6 +42,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -73,8 +79,18 @@ class DataQueryServiceImplTest {
     @Mock
     private ConversationContextService conversationContextService;
 
+    @Mock
+    private ConversationQuestionResolver conversationQuestionResolver;
+
     @InjectMocks
     private DataQueryServiceImpl dataQueryService;
+
+    @BeforeEach
+    void resolveQuestionsAsFirstTurnByDefault() {
+        lenient().when(conversationQuestionResolver.resolve(
+                        anyLong(), nullable(String.class), anyString()))
+                .thenAnswer(invocation -> ResolvedConversationQuestion.firstTurn(invocation.getArgument(2)));
+    }
 
     @Test
     void shouldGenerateAuditExecuteAndCacheMaskedQuery() {
@@ -84,7 +100,8 @@ class DataQueryServiceImplTest {
         List<Map<String, Object>> maskedRows = List.of(Map.of("id", 1L, "customer_name", "客*1"));
         String summary = "共返回 1 条客户数据。";
         when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
-        when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, auditedSql));
+        when(textToSqlService.generateSqlWithAuditRecovery(question))
+                .thenReturn(SqlGenerationOutcome.initial(new SqlGenerationVO(question, auditedSql)));
         when(sqlExecutionService.executeAuditedSelect(auditedSql)).thenReturn(rows);
         when(dataMaskingService.maskRows(rows)).thenReturn(maskedRows);
         when(resultAnalysisService.analyze(question, auditedSql, maskedRows, 1)).thenReturn(summary);
@@ -98,7 +115,7 @@ class DataQueryServiceImplTest {
         assertThat(result.summary()).isEqualTo(summary);
         assertThat(result.cacheHit()).isFalse();
         verify(queryRequestGuard).validateAndAcquire(7L, question);
-        verify(textToSqlService).generateSql(question);
+        verify(textToSqlService).generateSqlWithAuditRecovery(question);
         verify(sqlExecutionService).executeAuditedSelect(auditedSql);
         verify(dataMaskingService).maskRows(rows);
         verify(resultAnalysisService).analyze(question, auditedSql, maskedRows, 1);
@@ -156,7 +173,7 @@ class DataQueryServiceImplTest {
         QueryResultVO result = dataQueryService.query(7L, conversationId, question);
 
         assertThat(result.conversationId()).isEqualTo(conversationId);
-        verify(conversationContextService).recordTurnAfterHistory(
+        verify(conversationContextService).recordTurn(
                 7L, conversationId, question, question, "没有数据", "SUCCESS",
                 historyIdFuture);
     }
@@ -173,7 +190,8 @@ class DataQueryServiceImplTest {
                 new BadSqlGrammarException("query", failedSql,
                         new SQLException("Unknown column 'customer_nam'", "42S22", 1054)));
         when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
-        when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, failedSql));
+        when(textToSqlService.generateSqlWithAuditRecovery(question))
+                .thenReturn(SqlGenerationOutcome.initial(new SqlGenerationVO(question, failedSql)));
         when(sqlExecutionService.executeAuditedSelect(failedSql)).thenThrow(syntaxFailure);
         when(textToSqlService.correctSql(anyString(), anyString(), anyString())).thenReturn(correctedSql);
         when(sqlExecutionService.executeAuditedSelect(correctedSql)).thenReturn(rows);
@@ -194,7 +212,8 @@ class DataQueryServiceImplTest {
         SqlExecutionException connectionFailure = new SqlExecutionException(sql,
                 new DataAccessResourceFailureException("connection refused"));
         when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
-        when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, sql));
+        when(textToSqlService.generateSqlWithAuditRecovery(question))
+                .thenReturn(SqlGenerationOutcome.initial(new SqlGenerationVO(question, sql)));
         when(sqlExecutionService.executeAuditedSelect(sql)).thenThrow(connectionFailure);
 
         assertThatThrownBy(() -> dataQueryService.query(7L, question))
@@ -224,7 +243,8 @@ class DataQueryServiceImplTest {
         SqlExecutionException failure = new SqlExecutionException(sql,
                 new BadSqlGrammarException("query", sql, permissionDenied));
         when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
-        when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, sql));
+        when(textToSqlService.generateSqlWithAuditRecovery(question))
+                .thenReturn(SqlGenerationOutcome.initial(new SqlGenerationVO(question, sql)));
         when(sqlExecutionService.executeAuditedSelect(sql)).thenThrow(failure);
 
         assertThatThrownBy(() -> dataQueryService.query(7L, question))
@@ -244,7 +264,8 @@ class DataQueryServiceImplTest {
         SqlExecutionException secondFailure = badSqlGrammarFailure(secondSql);
         SqlExecutionException thirdFailure = badSqlGrammarFailure(thirdSql);
         when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
-        when(textToSqlService.generateSql(question)).thenReturn(new SqlGenerationVO(question, firstSql));
+        when(textToSqlService.generateSqlWithAuditRecovery(question))
+                .thenReturn(SqlGenerationOutcome.initial(new SqlGenerationVO(question, firstSql)));
         when(sqlExecutionService.executeAuditedSelect(firstSql)).thenThrow(firstFailure);
         when(textToSqlService.correctSql(question, firstSql, firstFailure.getCause().getMessage()))
                 .thenReturn(secondSql);
@@ -257,6 +278,31 @@ class DataQueryServiceImplTest {
                 .isSameAs(thirdFailure);
         verify(textToSqlService).correctSql(question, firstSql, firstFailure.getCause().getMessage());
         verify(textToSqlService).correctSql(question, secondSql, secondFailure.getCause().getMessage());
+    }
+
+    @Test
+    void shouldShareCorrectionBudgetBetweenAuditAndExecution() {
+        String question = "查询去年华中销售额最高的10个客户";
+        String firstSql = "SELECT bad_column_1 FROM biz_customer LIMIT 10";
+        String secondSql = "SELECT bad_column_2 FROM biz_customer LIMIT 10";
+        SqlExecutionException firstFailure = badSqlGrammarFailure(firstSql);
+        SqlExecutionException secondFailure = badSqlGrammarFailure(secondSql);
+        when(queryCacheService.get(7L, question)).thenReturn(Optional.empty());
+        when(textToSqlService.generateSqlWithAuditRecovery(question))
+                .thenReturn(new SqlGenerationOutcome(new SqlGenerationVO(question, firstSql), 1));
+        when(sqlExecutionService.executeAuditedSelect(firstSql)).thenThrow(firstFailure);
+        when(textToSqlService.correctSql(
+                question, firstSql, firstFailure.getCause().getMessage()))
+                .thenReturn(secondSql);
+        when(sqlExecutionService.executeAuditedSelect(secondSql)).thenThrow(secondFailure);
+
+        assertThatThrownBy(() -> dataQueryService.query(7L, question))
+                .isSameAs(secondFailure);
+
+        verify(textToSqlService).correctSql(
+                question, firstSql, firstFailure.getCause().getMessage());
+        verify(textToSqlService, never()).correctSql(
+                question, secondSql, secondFailure.getCause().getMessage());
     }
 
     @Test
@@ -300,6 +346,32 @@ class DataQueryServiceImplTest {
                         QueryHistoryRecordCommand::sqlAuditReason,
                         QueryHistoryRecordCommand::status)
                 .containsExactly(null, "REJECT", ResultCode.PROMPT_INJECTION_DETECTED.getMessage(), "AUDIT_REJECT");
+    }
+
+    @Test
+    void shouldUseResolvedStandaloneQuestionForSafetyAndCache() {
+        String conversationId = "7bc58b98-9b9d-4f6f-9fa5-429d94f2ee4a";
+        String originalQuestion = "那华东呢";
+        String standaloneQuestion = "查询华东地区的销售额";
+        QueryResultVO cachedResult = new QueryResultVO(
+                standaloneQuestion, "SELECT 1", List.of(), 0, "华东销售额为 100 万元", false);
+        when(conversationContextService.openSession(7L, conversationId, originalQuestion))
+                .thenReturn(conversationId);
+        when(conversationQuestionResolver.resolve(7L, conversationId, originalQuestion))
+                .thenReturn(new ResolvedConversationQuestion(
+                        standaloneQuestion, false, "{}", "历史摘要", 1L));
+        when(queryCacheService.get(7L, standaloneQuestion)).thenReturn(Optional.of(cachedResult));
+
+        QueryResultVO result = dataQueryService.query(7L, conversationId, originalQuestion);
+
+        assertThat(result.question()).isEqualTo(originalQuestion);
+        assertThat(result.cacheHit()).isTrue();
+        verify(queryRequestGuard).validateAndAcquire(7L, originalQuestion);
+        verify(queryRequestGuard).validate(standaloneQuestion);
+        verify(queryCacheService).get(7L, standaloneQuestion);
+        verify(conversationContextService).recordTurn(
+                eq(7L), eq(conversationId), eq(originalQuestion), eq(standaloneQuestion),
+                eq("华东销售额为 100 万元"), eq("SUCCESS"), any());
     }
 
     private SqlExecutionException badSqlGrammarFailure(String sql) {

@@ -21,6 +21,7 @@ app:
     # Redis only keeps the active working set; MySQL remains the durable source of truth.
     redis-ttl: 2h
     recent-turn-count: 3
+    rolling-summary-target-tokens: 1024
 
 server:
   servlet:
@@ -42,7 +43,11 @@ ai:
     api-key: ${DEEPSEEK_API_KEY:}
     model-name: deepseek-v4-pro
     temperature: 0.0
-    max-tokens: 2048
+    max-tokens: ${DEEPSEEK_MAX_TOKENS:2048}
+    # Keep this aligned with the actual model. The conservative default protects unknown gateways.
+    context-window-tokens: ${DEEPSEEK_CONTEXT_WINDOW_TOKENS:32768}
+    context-usage-limit: ${DEEPSEEK_CONTEXT_USAGE_LIMIT:0.80}
+    token-safety-margin: ${DEEPSEEK_TOKEN_SAFETY_MARGIN:256}
 
 knife4j:
   enable: true

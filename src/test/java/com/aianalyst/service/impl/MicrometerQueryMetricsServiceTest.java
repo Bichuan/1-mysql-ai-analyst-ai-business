@@ -25,12 +25,21 @@ class MicrometerQueryMetricsServiceTest {
             service.recordCacheMiss();
             service.recordCacheFallback();
             service.recordHistoryTaskRejected();
+            service.recordModelPromptTokens(321);
+            service.recordTokenCompression();
+            service.recordTokenBudgetRejected();
             service.recordQueryDuration(TimeUnit.MILLISECONDS.toNanos(12));
 
             assertThat(meterRegistry.get("ai.query.cache.hit").counter().count()).isEqualTo(1.0);
             assertThat(meterRegistry.get("ai.query.cache.miss").counter().count()).isEqualTo(1.0);
             assertThat(meterRegistry.get("ai.query.cache.fallback").counter().count()).isEqualTo(1.0);
             assertThat(meterRegistry.get("ai.query.history.task.rejected").counter().count()).isEqualTo(1.0);
+            assertThat(meterRegistry.get("ai.model.prompt.tokens.estimated").summary().totalAmount())
+                    .isEqualTo(321.0);
+            assertThat(meterRegistry.get("ai.model.token.budget.compression").counter().count())
+                    .isEqualTo(1.0);
+            assertThat(meterRegistry.get("ai.model.token.budget.rejected").counter().count())
+                    .isEqualTo(1.0);
             assertThat(meterRegistry.get("ai.query.request.duration").timer().count()).isEqualTo(1);
             assertThat(meterRegistry.get("ai.query.history.executor.active").gauge().value()).isZero();
         } finally {

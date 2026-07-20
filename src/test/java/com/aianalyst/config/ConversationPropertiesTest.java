@@ -15,6 +15,7 @@ class ConversationPropertiesTest {
 
         assertThat(properties.getRedisTtl()).isEqualTo(Duration.ofHours(2));
         assertThat(properties.getRecentTurnCount()).isEqualTo(3);
+        assertThat(properties.getRollingSummaryTargetTokens()).isEqualTo(1_024);
 
         properties.setRecentTurnCount(5);
         assertThat(properties.getRecentTurnCount()).isEqualTo(5);
@@ -29,6 +30,8 @@ class ConversationPropertiesTest {
         assertThatThrownBy(() -> properties.setRecentTurnCount(6))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> properties.setRedisTtl(Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> properties.setRollingSummaryTargetTokens(127))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

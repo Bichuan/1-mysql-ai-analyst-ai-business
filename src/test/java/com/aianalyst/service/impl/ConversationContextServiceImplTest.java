@@ -3,8 +3,10 @@ package com.aianalyst.service.impl;
 import com.aianalyst.common.BusinessException;
 import com.aianalyst.config.ConversationProperties;
 import com.aianalyst.dto.ConversationContextSnapshot;
+import com.aianalyst.dto.ConversationContextUpdateCommand;
 import com.aianalyst.dto.ConversationTurnSnapshot;
 import com.aianalyst.entity.ConversationSession;
+import com.aianalyst.service.TokenEstimator;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -32,13 +34,16 @@ class ConversationContextServiceImplTest {
     @Mock
     private RedisConversationContextStore redisStore;
 
+    @Mock
+    private TokenEstimator tokenEstimator;
+
     private final ConversationProperties properties = new ConversationProperties();
 
     @Test
     void shouldUseRedisWithoutReadingMysqlWhenActiveContextExists() {
         ConversationContextServiceImpl service = service();
         ConversationContextSnapshot cached = new ConversationContextSnapshot(
-                CONVERSATION_ID, null, 0, null, 1, 1, List.of());
+                CONVERSATION_ID, null, 0, null, 1, 1, 0, List.of());
         when(redisStore.get(7L, CONVERSATION_ID)).thenReturn(Optional.of(cached));
 
         String resolved = service.openSession(7L, CONVERSATION_ID, "查询客户");
@@ -56,7 +61,7 @@ class ConversationContextServiceImplTest {
         when(redisStore.get(7L, CONVERSATION_ID)).thenReturn(Optional.empty());
         when(persistenceService.findOrCreateOwnedSession(7L, CONVERSATION_ID, "查询客户"))
                 .thenReturn(session);
-        when(persistenceService.loadRecentSuccessfulTurns(11L, 3)).thenReturn(List.of(turn));
+        when(persistenceService.loadRecentSuccessfulTurns(11L, 0L, 3)).thenReturn(List.of(turn));
 
         assertThat(service.openSession(7L, CONVERSATION_ID, "查询客户"))
                 .isEqualTo(CONVERSATION_ID);
@@ -65,19 +70,45 @@ class ConversationContextServiceImplTest {
     }
 
     @Test
-    void shouldPersistAfterHistoryAndCacheOnlySuccessfulTurns() {
+    void shouldPersistBeforeHistoryCompletesAndThenLinkHistoryId() {
         ConversationContextServiceImpl service = service();
         ConversationTurnSnapshot turn = turn();
         when(persistenceService.appendTurn(
                 7L, CONVERSATION_ID, "那华东呢？", "查询华东销售额",
-                "华东销售额为100万元", 99L, "SUCCESS"))
-                .thenReturn(new ConversationPersistenceService.PersistedTurn(turn, 6L));
+                "华东销售额为100万元", null, "SUCCESS", 6, 4))
+                .thenReturn(new ConversationPersistenceService.PersistedTurn(turn, 6L, 21L, 140));
 
-        service.recordTurnAfterHistory(
+        CompletableFuture<Long> historyIdFuture = new CompletableFuture<>();
+
+        service.recordTurn(
                 7L, CONVERSATION_ID, "那华东呢？", "查询华东销售额",
-                "华东销售额为100万元", "SUCCESS", CompletableFuture.completedFuture(99L));
+                "华东销售额为100万元", "SUCCESS", historyIdFuture);
 
-        verify(redisStore).appendSuccessfulTurn(7L, CONVERSATION_ID, turn, 6L);
+        verify(redisStore).appendSuccessfulTurn(7L, CONVERSATION_ID, turn, 6L, 140);
+        verify(persistenceService, never()).linkQueryHistory(21L, 99L);
+
+        historyIdFuture.complete(99L);
+
+        verify(persistenceService).linkQueryHistory(21L, 99L);
+    }
+
+    @Test
+    void shouldCommitContextStateToMysqlBeforeUpdatingRedis() {
+        ConversationContextServiceImpl service = service();
+        ConversationContextUpdateCommand command = new ConversationContextUpdateCommand(
+                7L, "滚动摘要", 2L, "{\"metric\":\"销售额\"}", 130, 1, false);
+        when(persistenceService.compareAndSetContextState(
+                7L, CONVERSATION_ID, 7L, "滚动摘要", 2L,
+                "{\"metric\":\"销售额\"}", 130))
+                .thenReturn(true);
+        when(redisStore.updateContext(
+                7L, CONVERSATION_ID, 7L, 8L, "滚动摘要", 2L,
+                "{\"metric\":\"销售额\"}", 130, 1, false))
+                .thenReturn(false);
+
+        assertThat(service.updateContext(7L, CONVERSATION_ID, command)).isTrue();
+
+        verify(redisStore).evict(7L, CONVERSATION_ID);
     }
 
     @Test
@@ -90,7 +121,8 @@ class ConversationContextServiceImplTest {
     }
 
     private ConversationContextServiceImpl service() {
-        return new ConversationContextServiceImpl(persistenceService, redisStore, properties);
+        return new ConversationContextServiceImpl(
+                persistenceService, redisStore, properties, tokenEstimator);
     }
 
     private ConversationSession session() {

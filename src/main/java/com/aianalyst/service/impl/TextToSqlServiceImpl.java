@@ -2,11 +2,14 @@ package com.aianalyst.service.impl;
 
 import com.aianalyst.common.BusinessException;
 import com.aianalyst.common.ResultCode;
+import com.aianalyst.dto.SqlGenerationOutcome;
 import com.aianalyst.service.DeepSeekChatService;
 import com.aianalyst.service.SqlAuditService;
 import com.aianalyst.service.prompt.TextToSqlPromptBuilder;
 import com.aianalyst.service.TextToSqlService;
 import com.aianalyst.vo.SqlGenerationVO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -17,7 +20,9 @@ import org.springframework.util.StringUtils;
 @Service
 public class TextToSqlServiceImpl implements TextToSqlService {
 
+    private static final Logger log = LoggerFactory.getLogger(TextToSqlServiceImpl.class);
     private static final int MAX_CORRECTION_ERROR_LENGTH = 1_000;
+    private static final int MAX_FAILED_CANDIDATE_LENGTH = 8_000;
 
     private final TextToSqlPromptBuilder promptBuilder;
     private final DeepSeekChatService deepSeekChatService;
@@ -33,8 +38,29 @@ public class TextToSqlServiceImpl implements TextToSqlService {
 
     @Override
     public SqlGenerationVO generateSql(String question) {
-        String auditedSql = generateAndAudit(promptBuilder.build(question));
-        return new SqlGenerationVO(question, auditedSql);
+        return generateSqlWithAuditRecovery(question).result();
+    }
+
+    @Override
+    public SqlGenerationOutcome generateSqlWithAuditRecovery(String question) {
+        String candidate = generateCandidate(promptBuilder.build(question));
+        try {
+            String auditedSql = sqlAuditService.auditAndNormalize(candidate);
+            return SqlGenerationOutcome.initial(new SqlGenerationVO(question, auditedSql));
+        } catch (BusinessException exception) {
+            if (!isCorrectableAuditFormatFailure(exception)) {
+                throw exception;
+            }
+            log.warn("Model SQL output failed format audit; requesting one bounded correction. reason={}",
+                    exception.getMessage());
+            String correctionPrompt = promptBuilder.buildAuditCorrection(
+                    question,
+                    truncate(candidate, MAX_FAILED_CANDIDATE_LENGTH),
+                    truncate(exception.getMessage(), MAX_CORRECTION_ERROR_LENGTH));
+            String correctedCandidate = generateCandidate(correctionPrompt);
+            String auditedSql = sqlAuditService.auditAndNormalize(correctedCandidate);
+            return new SqlGenerationOutcome(new SqlGenerationVO(question, auditedSql), 1);
+        }
     }
 
     @Override
@@ -45,12 +71,24 @@ public class TextToSqlServiceImpl implements TextToSqlService {
     }
 
     private String generateAndAudit(String prompt) {
-        String sql = stripMarkdownFence(deepSeekChatService.generate(prompt));
-        if (!StringUtils.hasText(sql)) {
+        return sqlAuditService.auditAndNormalize(generateCandidate(prompt));
+    }
+
+    private String generateCandidate(String prompt) {
+        String candidate = stripMarkdownFence(deepSeekChatService.generate(prompt));
+        if (!StringUtils.hasText(candidate)) {
             throw new BusinessException(ResultCode.BUSINESS_ERROR, "模型未返回可用 SQL");
         }
         // 去掉 Markdown 只是格式兼容；真正的安全判断必须依赖 JSqlParser 审核。
-        return sqlAuditService.auditAndNormalize(sql);
+        return candidate;
+    }
+
+    private boolean isCorrectableAuditFormatFailure(BusinessException exception) {
+        if (exception.getResultCode() != ResultCode.SQL_AUDIT_FAILED) {
+            return false;
+        }
+        return "只允许单条 SQL 语句".equals(exception.getMessage())
+                || "SQL 语法解析失败".equals(exception.getMessage());
     }
 
     private String stripMarkdownFence(String response) {
@@ -69,10 +107,14 @@ public class TextToSqlServiceImpl implements TextToSqlService {
         if (!StringUtils.hasText(databaseError)) {
             return "未知 SQL 执行错误";
         }
-        String value = databaseError.trim();
-        // 防止异常堆栈或超长错误信息膨胀 Prompt、增加模型费用。
-        return value.length() <= MAX_CORRECTION_ERROR_LENGTH
-                ? value
-                : value.substring(0, MAX_CORRECTION_ERROR_LENGTH) + "...";
+        return truncate(databaseError, MAX_CORRECTION_ERROR_LENGTH);
+    }
+
+    private String truncate(String value, int maxLength) {
+        String normalized = value == null ? "" : value.trim();
+        // 防止异常堆栈或模型候选膨胀 Prompt、增加费用。
+        return normalized.length() <= maxLength
+                ? normalized
+                : normalized.substring(0, maxLength) + "...";
     }
 }

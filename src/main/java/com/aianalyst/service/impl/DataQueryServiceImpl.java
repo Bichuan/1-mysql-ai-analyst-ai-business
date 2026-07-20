@@ -4,7 +4,10 @@ import com.aianalyst.common.BusinessException;
 import com.aianalyst.common.ResultCode;
 import com.aianalyst.common.SqlExecutionException;
 import com.aianalyst.dto.QueryHistoryRecordCommand;
+import com.aianalyst.dto.ResolvedConversationQuestion;
+import com.aianalyst.dto.SqlGenerationOutcome;
 import com.aianalyst.service.ConversationContextService;
+import com.aianalyst.service.ConversationQuestionResolver;
 import com.aianalyst.service.DataMaskingService;
 import com.aianalyst.service.DataQueryService;
 import com.aianalyst.service.QueryCacheService;
@@ -63,6 +66,7 @@ public class DataQueryServiceImpl implements DataQueryService {
     private final QueryHistoryService queryHistoryService;
     private final QueryMetricsService queryMetricsService;
     private final ConversationContextService conversationContextService;
+    private final ConversationQuestionResolver conversationQuestionResolver;
 
     public DataQueryServiceImpl(QueryRequestGuard queryRequestGuard,
                                 QueryCacheService queryCacheService,
@@ -72,7 +76,8 @@ public class DataQueryServiceImpl implements DataQueryService {
                                 ResultAnalysisService resultAnalysisService,
                                 QueryHistoryService queryHistoryService,
                                 QueryMetricsService queryMetricsService,
-                                ConversationContextService conversationContextService) {
+                                ConversationContextService conversationContextService,
+                                ConversationQuestionResolver conversationQuestionResolver) {
         this.queryRequestGuard = queryRequestGuard;
         this.queryCacheService = queryCacheService;
         this.textToSqlService = textToSqlService;
@@ -82,6 +87,7 @@ public class DataQueryServiceImpl implements DataQueryService {
         this.queryHistoryService = queryHistoryService;
         this.queryMetricsService = queryMetricsService;
         this.conversationContextService = conversationContextService;
+        this.conversationQuestionResolver = conversationQuestionResolver;
     }
 
     @Override
@@ -89,6 +95,7 @@ public class DataQueryServiceImpl implements DataQueryService {
         long queryStartedAt = System.nanoTime();
         String sql = null;
         String conversationId = null;
+        String standaloneQuestion = question;
         int totalSqlExecutionTime = 0;
         try {
             // Guard 先进行意图、语义校验和限流；缓存命中也必须消耗一次额度，不能绕过流量保护。
@@ -96,23 +103,32 @@ public class DataQueryServiceImpl implements DataQueryService {
             // Only validated raw input may create or resume reusable conversation context.
             conversationId = conversationContextService.openSession(
                     userId, requestedConversationId, question);
-            Optional<QueryResultVO> cachedResult = queryCacheService.get(userId, question);
+            ResolvedConversationQuestion resolvedQuestion = conversationQuestionResolver.resolve(
+                    userId, conversationId, question);
+            standaloneQuestion = resolvedQuestion.standaloneQuestion();
+            // Rewritten content is model output: validate it again, but do not consume a second rate-limit token.
+            queryRequestGuard.validate(standaloneQuestion);
+
+            Optional<QueryResultVO> cachedResult = queryCacheService.get(userId, standaloneQuestion);
             // 查询缓存
             if (cachedResult.isPresent()) {
                 QueryResultVO result = withCurrentQuestion(cachedResult.get(), question, conversationId);
                 // 缓存命中同样是一次用户查询，需要保留审计轨迹；SQL 执行耗时为 0。
                 CompletableFuture<Long> historyIdFuture = recordSuccess(
-                        userId, question, result.sql(), result.rows(), result.summary(), 0);
-                conversationContextService.recordTurnAfterHistory(
-                        userId, conversationId, question, question, result.summary(),
+                        userId, standaloneQuestion, result.sql(), result.rows(), result.summary(), 0);
+                conversationContextService.recordTurn(
+                        userId, conversationId, question, standaloneQuestion, result.summary(),
                         "SUCCESS", historyIdFuture);
                 return result;
             }
 
-            SqlGenerationVO generatedSql = textToSqlService.generateSql(question);
+            SqlGenerationOutcome generationOutcome =
+                    textToSqlService.generateSqlWithAuditRecovery(standaloneQuestion);
+            SqlGenerationVO generatedSql = generationOutcome.result();
             sql = generatedSql.sql();
+            int correctionAttemptsUsed = generationOutcome.correctionAttemptsUsed();
 
-            for (int correctionAttempt = 0; ; correctionAttempt++) {
+            for (;;) {
                 long executionStartedAt = System.nanoTime();
                 try {
                     List<Map<String, Object>> rawRows = sqlExecutionService.executeAuditedSelect(sql);
@@ -121,40 +137,41 @@ public class DataQueryServiceImpl implements DataQueryService {
                     List<Map<String, Object>> maskedRows = dataMaskingService.maskRows(rawRows);
                     // 总结失败时 ResultAnalysisService 会返回降级文案，不能让可用查询结果被外部模型故障拖垮。
                     String summary = resultAnalysisService.analyze(
-                            generatedSql.question(), sql, maskedRows, maskedRows.size());
+                            standaloneQuestion, sql, maskedRows, maskedRows.size());
                     QueryResultVO result = new QueryResultVO(
-                            generatedSql.question(), sql, maskedRows, maskedRows.size(), summary, false,
+                            question, sql, maskedRows, maskedRows.size(), summary, false,
                             conversationId);
                     // 缓存只写入已审核、已执行、已脱敏且有总结的完整成功响应。
-                    queryCacheService.put(userId, question, result);
+                    queryCacheService.put(userId, standaloneQuestion, result);
                     CompletableFuture<Long> historyIdFuture = recordSuccess(
-                            userId, generatedSql.question(), sql, maskedRows, summary, totalSqlExecutionTime);
-                    conversationContextService.recordTurnAfterHistory(
-                            userId, conversationId, question, generatedSql.question(), summary,
+                            userId, standaloneQuestion, sql, maskedRows, summary, totalSqlExecutionTime);
+                    conversationContextService.recordTurn(
+                            userId, conversationId, question, standaloneQuestion, summary,
                             "SUCCESS", historyIdFuture);
                     return result;
                 } catch (SqlExecutionException exception) {
                     totalSqlExecutionTime = addExecutionTime(totalSqlExecutionTime, executionStartedAt);
                     // 只有 SQL 语法/字段类错误可能由模型修复；网络、超时和权限错误重试没有意义。
                     if (!isCorrectableSyntaxFailure(exception)
-                            || correctionAttempt >= MAX_SQL_CORRECTION_ATTEMPTS) {
+                            || correctionAttemptsUsed >= MAX_SQL_CORRECTION_ATTEMPTS) {
                         throw exception;
                     }
 
-                    int currentAttempt = correctionAttempt + 1;
-                    // 上限为 2：避免错误 Prompt 或模型异常造成无限循环和不可控模型费用。
+                    int currentAttempt = ++correctionAttemptsUsed;
+                    // 审核格式纠错与执行语法纠错共享上限 2，避免模型调用次数失控。
                     log.warn("Generated SQL had a correctable grammar failure; requesting correction attempt {}/{}",
                             currentAttempt, MAX_SQL_CORRECTION_ATTEMPTS);
                     // correctSql 会重新走 Day8 的安全审核，修复流程不能绕过审核直接执行。
-                    sql = textToSqlService.correctSql(question, sql, correctionErrorMessage(exception));
+                    sql = textToSqlService.correctSql(
+                            standaloneQuestion, sql, correctionErrorMessage(exception));
                 }
             }
         } catch (RuntimeException exception) {
             CompletableFuture<Long> historyIdFuture = recordFailure(
-                    userId, question, sql, totalSqlExecutionTime, exception);
+                    userId, standaloneQuestion, sql, totalSqlExecutionTime, exception);
             if (conversationId != null) {
-                conversationContextService.recordTurnAfterHistory(
-                        userId, conversationId, question, question, publicErrorMessage(exception),
+                conversationContextService.recordTurn(
+                        userId, conversationId, question, standaloneQuestion, publicErrorMessage(exception),
                         "FAIL", historyIdFuture);
             }
             throw exception;

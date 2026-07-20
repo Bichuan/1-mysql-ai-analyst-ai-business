@@ -4,9 +4,11 @@ import com.aianalyst.common.BusinessException;
 import com.aianalyst.common.ResultCode;
 import com.aianalyst.config.ConversationProperties;
 import com.aianalyst.dto.ConversationContextSnapshot;
+import com.aianalyst.dto.ConversationContextUpdateCommand;
 import com.aianalyst.dto.ConversationTurnSnapshot;
 import com.aianalyst.entity.ConversationSession;
 import com.aianalyst.service.ConversationContextService;
+import com.aianalyst.service.TokenEstimator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -29,13 +31,16 @@ public class ConversationContextServiceImpl implements ConversationContextServic
     private final ConversationPersistenceService persistenceService;
     private final RedisConversationContextStore redisStore;
     private final ConversationProperties properties;
+    private final TokenEstimator tokenEstimator;
 
     public ConversationContextServiceImpl(ConversationPersistenceService persistenceService,
                                           RedisConversationContextStore redisStore,
-                                          ConversationProperties properties) {
+                                          ConversationProperties properties,
+                                          TokenEstimator tokenEstimator) {
         this.persistenceService = persistenceService;
         this.redisStore = redisStore;
         this.properties = properties;
+        this.tokenEstimator = tokenEstimator;
     }
 
     @Override
@@ -50,7 +55,7 @@ public class ConversationContextServiceImpl implements ConversationContextServic
         ConversationSession session = persistenceService.findOrCreateOwnedSession(
                 userId, conversationId, firstQuestion);
         List<ConversationTurnSnapshot> recentTurns = persistenceService.loadRecentSuccessfulTurns(
-                session.getId(), properties.getRecentTurnCount());
+                session.getId(), safeLong(session.getSummaryUntilTurn()), properties.getRecentTurnCount());
         redisStore.restore(session, recentTurns);
         return conversationId;
     }
@@ -69,51 +74,97 @@ public class ConversationContextServiceImpl implements ConversationContextServic
             return Optional.empty();
         }
         List<ConversationTurnSnapshot> recentTurns = persistenceService.loadRecentSuccessfulTurns(
-                session.getId(), properties.getRecentTurnCount());
+                session.getId(), safeLong(session.getSummaryUntilTurn()), properties.getRecentTurnCount());
         redisStore.restore(session, recentTurns);
         return redisStore.get(userId, conversationId)
                 .or(() -> Optional.of(toSnapshot(session, recentTurns)));
     }
 
     @Override
-    public void recordTurnAfterHistory(Long userId,
-                                       String conversationId,
-                                       String originalQuestion,
-                                       String standaloneQuestion,
-                                       String answerSummary,
-                                       String status,
-                                       CompletableFuture<Long> queryHistoryIdFuture) {
+    public boolean updateContext(Long userId,
+                                 String conversationId,
+                                 ConversationContextUpdateCommand command) {
+        boolean mysqlUpdated = persistenceService.compareAndSetContextState(
+                userId,
+                conversationId,
+                command.expectedVersion(),
+                command.rollingSummary(),
+                command.summaryUntilTurn(),
+                command.structuredState(),
+                command.estimatedTokens());
+        if (!mysqlUpdated) {
+            return false;
+        }
+
+        long newVersion = command.expectedVersion() + 1;
+        boolean redisUpdated = redisStore.updateContext(
+                userId,
+                conversationId,
+                command.expectedVersion(),
+                newVersion,
+                command.rollingSummary(),
+                command.summaryUntilTurn(),
+                command.structuredState(),
+                command.estimatedTokens(),
+                command.removeOldestTurns(),
+                command.clearRecentTurns());
+        if (!redisUpdated) {
+            // MySQL has committed the authoritative state. Remove a stale hot copy so the next
+            // request reconstructs both keys instead of reading mixed versions.
+            redisStore.evict(userId, conversationId);
+        }
+        return true;
+    }
+
+    @Override
+    public void recordTurn(Long userId,
+                           String conversationId,
+                           String originalQuestion,
+                           String standaloneQuestion,
+                           String answerSummary,
+                           String status,
+                           CompletableFuture<Long> queryHistoryIdFuture) {
         if (!StringUtils.hasText(conversationId)) {
             return;
         }
-        CompletableFuture<Long> historyFuture = queryHistoryIdFuture == null
-                ? CompletableFuture.completedFuture(null)
-                : queryHistoryIdFuture;
-        historyFuture.whenComplete((queryHistoryId, historyFailure) -> {
-            if (historyFailure != null) {
-                log.warn("Query history id was unavailable for conversation turn. conversationId={}, cause={}",
-                        conversationId, historyFailure.getClass().getSimpleName());
-            }
-            persistTurnSafely(userId, conversationId, originalQuestion, standaloneQuestion,
-                    answerSummary, queryHistoryId, status);
-        });
-    }
-
-    private void persistTurnSafely(Long userId,
-                                   String conversationId,
-                                   String originalQuestion,
-                                   String standaloneQuestion,
-                                   String answerSummary,
-                                   Long queryHistoryId,
-                                   String status) {
         try {
+            int userEstimatedTokens = saturatedAdd(
+                    tokenEstimator.estimate(originalQuestion),
+                    tokenEstimator.estimate(standaloneQuestion),
+                    6);
+            int assistantEstimatedTokens = saturatedAdd(
+                    tokenEstimator.estimate(answerSummary), 4, 0);
             ConversationPersistenceService.PersistedTurn persistedTurn = persistenceService.appendTurn(
                     userId, conversationId, originalQuestion, standaloneQuestion,
-                    answerSummary, queryHistoryId, status);
+                    answerSummary, null, status,
+                    userEstimatedTokens, assistantEstimatedTokens);
             if ("SUCCESS".equals(status)) {
                 redisStore.appendSuccessfulTurn(
-                        userId, conversationId, persistedTurn.turn(), persistedTurn.version());
+                        userId, conversationId, persistedTurn.turn(), persistedTurn.version(),
+                        persistedTurn.estimatedTokens());
+            } else {
+                // Failed and rejected turns remain durable audit data but must never become reusable
+                // LLM memory. Eviction also prevents a stale Redis version after the MySQL increment.
+                redisStore.evict(userId, conversationId);
             }
+
+            CompletableFuture<Long> historyFuture = queryHistoryIdFuture == null
+                    ? CompletableFuture.completedFuture(null)
+                    : queryHistoryIdFuture;
+            historyFuture.whenComplete((queryHistoryId, historyFailure) -> {
+                if (historyFailure != null) {
+                    log.warn("Query history id was unavailable for conversation turn. conversationId={}, cause={}",
+                            conversationId, historyFailure.getClass().getSimpleName());
+                    return;
+                }
+                try {
+                    persistenceService.linkQueryHistory(
+                            persistedTurn.assistantMessageId(), queryHistoryId);
+                } catch (RuntimeException exception) {
+                    log.warn("Failed to link conversation message to query history. conversationId={}, cause={}",
+                            conversationId, exception.getClass().getSimpleName());
+                }
+            });
         } catch (RuntimeException exception) {
             // The user's query result is already available. Context persistence is auxiliary and
             // must not turn a successful read-only query into a failed HTTP response.
@@ -131,6 +182,7 @@ public class ConversationContextServiceImpl implements ConversationContextServic
                 session.getStructuredState(),
                 safeLong(session.getCurrentTurn()),
                 safeLong(session.getVersion()),
+                session.getEstimatedTokens() == null ? 0 : Math.max(0, session.getEstimatedTokens()),
                 recentTurns);
     }
 
@@ -150,5 +202,11 @@ public class ConversationContextServiceImpl implements ConversationContextServic
 
     private long safeLong(Long value) {
         return value == null ? 0L : value;
+    }
+
+    private int saturatedAdd(int first, int second, int third) {
+        return (int) Math.min(
+                Integer.MAX_VALUE,
+                (long) Math.max(0, first) + Math.max(0, second) + Math.max(0, third));
     }
 }

@@ -10,6 +10,7 @@ public record ConversationContextSnapshot(
         String structuredState,
         long currentTurn,
         long version,
+        int estimatedTokens,
         List<ConversationTurnSnapshot> recentTurns) {
 
     public ConversationContextSnapshot {

@@ -6,5 +6,14 @@ package com.aianalyst.service;
  */
 public interface QueryRequestGuard {
 
-    void validateAndAcquire(Long userId, String question);
+    /** Deterministic safety checks without consuming a rate-limit token. */
+    void validate(String question);
+
+    /** Consumes exactly one token for one user-initiated HTTP query. */
+    void acquire(Long userId);
+
+    default void validateAndAcquire(Long userId, String question) {
+        validate(question);
+        acquire(userId);
+    }
 }

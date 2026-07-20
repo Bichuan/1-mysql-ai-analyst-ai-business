@@ -7,7 +7,7 @@
 - **不是聊天机器人**：围绕企业业务库完成自然语言查询、SQL 审核、只读执行、结果分析和审计闭环。
 - **纵深 SQL 防御**：Prompt 约束、意图校验、JSqlParser AST 审核、强制 `LIMIT`、查询超时和 MySQL 只读账号共同兜底。
 - **双数据源隔离**：系统库由 MyBatis Plus 管理，动态业务 SQL 只能通过只读 `JdbcTemplate` 执行。
-- **AI 自纠错**：仅语法或字段类错误允许携带受控错误信息重试，最多两次；权限、网络和安全拒绝不重试。
+- **AI 自纠错**：多语句/格式错误最多修复一次，执行语法/字段错误使用剩余额度；共享最多两次，权限、网络和危险能力拒绝不重试。
 - **数据最小暴露**：查询结果先脱敏，再发送给大模型总结；缓存和历史记录同样只保存脱敏数据。
 - **性能与可观测性**：Redis 缓存、Lua 原子限流、独立审计线程池，以及 Micrometer 查询、缓存和线程池指标。
 
@@ -223,3 +223,6 @@ npm.cmd run dev
 - Day26 项目复盘与源码学习指南：[`docs/day26-project-review-study-guide.md`](docs/day26-project-review-study-guide.md)
 - Day27 五个核心技术点与面试回答：[`docs/day27-core-technical-points-interview-guide.md`](docs/day27-core-technical-points-interview-guide.md)
 - Day28 对话上下文分层存储：[`docs/day28-conversation-storage-guide.md`](docs/day28-conversation-storage-guide.md)
+- Day29 最近窗口、追问改写与滚动摘要：[`docs/day29-context-window-guide.md`](docs/day29-context-window-guide.md)
+- Day30 Token 预算、80%硬阈值与压力压缩：[`docs/day30-token-budget-guide.md`](docs/day30-token-budget-guide.md)
+- Day28～30 多轮上下文综合学习手册：[`docs/day28-30-conversation-context-study-guide.md`](docs/day28-30-conversation-context-study-guide.md)

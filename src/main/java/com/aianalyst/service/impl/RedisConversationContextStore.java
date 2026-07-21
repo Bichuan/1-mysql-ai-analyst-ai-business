@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** Redis hot store: one Hash for session state and one List for recent compact turns. */
+/** Redis 热存储：一个 Hash 用于会话状态，一个 List 用于近期精简对话轮次。 */
 @Component
 public class RedisConversationContextStore {
 
@@ -161,11 +161,11 @@ public class RedisConversationContextStore {
             if (recentTurns != null && !recentTurns.isEmpty()) {
                 arguments.addAll(recentTurns.stream().map(this::serialize).toList());
             }
-            // Both keys share one Redis Cluster hash tag, so first-writer-wins restoration is atomic.
+            // 两个 key 共享同一个 Redis Cluster 哈希标签，因此首次写入即生效的恢复操作是原子性的。
             redisTemplate.execute(
                     RESTORE_SCRIPT, List.of(metaKey, turnsKey), arguments.toArray());
         } catch (RuntimeException exception) {
-            // Redis is an acceleration layer. MySQL data has already been committed at this point.
+            // Redis 是加速层，此时 MySQL 数据已经提交。
             log.warn("Conversation cache restore failed. key={}, cause={}",
                     metaKey, exception.getClass().getSimpleName());
         }
@@ -203,8 +203,8 @@ public class RedisConversationContextStore {
                     serialize(turn),
                     String.valueOf(properties.getRedisTtl().toSeconds()));
             if (!Long.valueOf(1L).equals(updated)) {
-                // A concurrent request wrote a newer version first, or this hot copy missed an
-                // intermediate update. Rebuild from MySQL instead of accepting an out-of-order list.
+                // 并发请求先写入了更新的版本，或者此热副本漏掉了中间更新。
+                // 从 MySQL 重建，而不是接受乱序的列表。
                 evict(userId, conversationId);
             }
         } catch (RuntimeException exception) {
@@ -266,12 +266,12 @@ public class RedisConversationContextStore {
     }
 
     private static String hashTag(Long userId, String conversationId) {
-        // The shared Redis Cluster hash tag keeps meta and turns on the same node for Lua updates.
+        // 共享的 Redis Cluster 哈希标签确保 meta 和 turns 位于同一节点，以便执行 Lua 更新。
         return "{" + userId + ':' + conversationId + '}';
     }
 
     private List<ConversationTurnSnapshot> readTurns(Long userId, String conversationId) {
-        // A fourth item may exist briefly until its predecessor is safely merged into the summary.
+        // 第四个元素可能短暂存在，直到其前驱被安全地合并到摘要中。
         List<String> values = redisTemplate.opsForList().range(
                 turnsKey(userId, conversationId), 0, -1);
         if (values == null || values.isEmpty()) {
@@ -285,7 +285,7 @@ public class RedisConversationContextStore {
             try {
                 turns.add(objectMapper.readValue(value, ConversationTurnSnapshot.class));
             } catch (JsonProcessingException exception) {
-                throw new IllegalStateException("invalid cached conversation turn", exception);
+                throw new IllegalStateException("无效的缓存对话轮次", exception);
             }
         }
         return turns;
@@ -295,7 +295,7 @@ public class RedisConversationContextStore {
         try {
             return objectMapper.writeValueAsString(turn);
         } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("conversation turn cannot be serialized", exception);
+            throw new IllegalStateException("对话轮次无法序列化", exception);
         }
     }
 

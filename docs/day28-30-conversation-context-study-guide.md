@@ -742,11 +742,12 @@ Prompt估算 + 输出预留 + 安全余量 > 模型窗口80%
 2. `service/TokenEstimator.java`
 3. `service/impl/ConservativeTokenEstimator.java`
 4. `dto/TokenBudgetAssessment.java`
-5. `service/TokenBudgetService.java`
-6. `service/impl/DeepSeekChatServiceImpl.java`
-7. `service/impl/DeepSeekConversationQuestionResolver.java`
-8. `service/impl/ConversationPersistenceService.java`
-9. `service/impl/MicrometerQueryMetricsService.java`
+5. `service/TokenBudgetService.java`：Token预算服务接口
+6. `service/impl/TokenBudgetServiceImpl.java`：80%预算计算与硬拒绝实现
+7. `service/impl/DeepSeekChatServiceImpl.java`
+8. `service/impl/DeepSeekConversationQuestionResolver.java`
+9. `service/impl/ConversationPersistenceService.java`
+10. `service/impl/MicrometerQueryMetricsService.java`
 
 ---
 

@@ -56,7 +56,7 @@ class DeepSeekChatServiceImplTest {
 
     private DeepSeekChatServiceImpl chatService(DeepSeekProperties properties,
                                                 QueryMetricsService metricsService) {
-        TokenBudgetService budgetService = new TokenBudgetService(
+        TokenBudgetService budgetService = new TokenBudgetServiceImpl(
                 properties, new ConservativeTokenEstimator());
         return new DeepSeekChatServiceImpl(properties, budgetService, metricsService);
     }

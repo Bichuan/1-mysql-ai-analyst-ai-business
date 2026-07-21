@@ -189,7 +189,8 @@ GET /api/actuator/metrics/ai.model.token.budget.rejected
 | 职责 | 源码 |
 |---|---|
 | 保守 Token 估算 | `service/impl/ConservativeTokenEstimator.java` |
-| 80%预算计算与硬拒绝 | `service/TokenBudgetService.java` |
+| Token预算服务接口 | `service/TokenBudgetService.java` |
+| 80%预算计算与硬拒绝 | `service/impl/TokenBudgetServiceImpl.java` |
 | 预算结果 | `dto/TokenBudgetAssessment.java` |
 | 上下文压力压缩 | `service/impl/DeepSeekConversationQuestionResolver.java` |
 | 压缩 Prompt | `service/prompt/ConversationContextPromptBuilder.java` |

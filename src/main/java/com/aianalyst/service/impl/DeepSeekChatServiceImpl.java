@@ -60,6 +60,10 @@ public class DeepSeekChatServiceImpl implements DeepSeekChatService {
                         .modelName(properties.getModelName())
                         .temperature(properties.getTemperature())
                         .maxTokens(properties.getMaxTokens())
+                        // Native HTTP timeout is the final stop even when an upper-layer Future is cancelled.
+                        .timeout(properties.getTimeout())
+                        // SQL semantic correction is managed explicitly; transport retries stay bounded separately.
+                        .maxRetries(properties.getMaxRetries())
                         .build();
             }
             return chatModel;

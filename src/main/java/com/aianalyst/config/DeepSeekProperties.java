@@ -2,6 +2,8 @@ package com.aianalyst.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.time.Duration;
+
 /** Local configuration for the OpenAI-compatible DeepSeek Chat Completions API. */
 @ConfigurationProperties(prefix = "ai.deepseek")
 public class DeepSeekProperties {
@@ -14,6 +16,8 @@ public class DeepSeekProperties {
     private int contextWindowTokens = 32_768;
     private double contextUsageLimit = 0.80D;
     private int tokenSafetyMargin = 256;
+    private Duration timeout = Duration.ofSeconds(25);
+    private int maxRetries = 0;
 
     public String getBaseUrl() {
         return baseUrl;
@@ -89,5 +93,27 @@ public class DeepSeekProperties {
             throw new IllegalArgumentException("ai.deepseek.token-safety-margin must not be negative");
         }
         this.tokenSafetyMargin = tokenSafetyMargin;
+    }
+
+    public Duration getTimeout() {
+        return timeout;
+    }
+
+    public void setTimeout(Duration timeout) {
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("ai.deepseek.timeout must be positive");
+        }
+        this.timeout = timeout;
+    }
+
+    public int getMaxRetries() {
+        return maxRetries;
+    }
+
+    public void setMaxRetries(int maxRetries) {
+        if (maxRetries < 0 || maxRetries > 1) {
+            throw new IllegalArgumentException("ai.deepseek.max-retries must be between 0 and 1");
+        }
+        this.maxRetries = maxRetries;
     }
 }

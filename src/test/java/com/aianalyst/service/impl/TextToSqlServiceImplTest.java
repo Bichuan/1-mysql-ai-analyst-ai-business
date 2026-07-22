@@ -3,7 +3,7 @@ package com.aianalyst.service.impl;
 import com.aianalyst.common.BusinessException;
 import com.aianalyst.common.ResultCode;
 import com.aianalyst.dto.SqlGenerationOutcome;
-import com.aianalyst.service.DeepSeekChatService;
+import com.aianalyst.service.ModelResilienceGateway;
 import com.aianalyst.service.SqlAuditService;
 import com.aianalyst.service.prompt.TextToSqlPromptBuilder;
 import com.aianalyst.vo.SqlGenerationVO;
@@ -27,7 +27,7 @@ class TextToSqlServiceImplTest {
     private TextToSqlPromptBuilder promptBuilder;
 
     @Mock
-    private DeepSeekChatService deepSeekChatService;
+    private ModelResilienceGateway modelResilienceGateway;
 
     @Mock
     private SqlAuditService sqlAuditService;
@@ -38,7 +38,9 @@ class TextToSqlServiceImplTest {
     @Test
     void shouldStripSqlMarkdownFence() {
         when(promptBuilder.build("查询客户")).thenReturn("prompt");
-        when(deepSeekChatService.generate("prompt")).thenReturn("```sql\nSELECT id FROM biz_customer LIMIT 10;\n```");
+        when(modelResilienceGateway.generateSql("prompt")).thenReturn(
+                java.util.concurrent.CompletableFuture.completedFuture(
+                        "```sql\nSELECT id FROM biz_customer LIMIT 10;\n```"));
         when(sqlAuditService.auditAndNormalize("SELECT id FROM biz_customer LIMIT 10;"))
                 .thenReturn("SELECT id FROM biz_customer LIMIT 10");
 
@@ -50,7 +52,8 @@ class TextToSqlServiceImplTest {
     @Test
     void shouldRejectEmptyModelResponse() {
         when(promptBuilder.build("查询客户")).thenReturn("prompt");
-        when(deepSeekChatService.generate("prompt")).thenReturn("   ");
+        when(modelResilienceGateway.generateSql("prompt")).thenReturn(
+                java.util.concurrent.CompletableFuture.completedFuture("   "));
 
         assertThatThrownBy(() -> textToSqlService.generateSql("查询客户"))
                 .isInstanceOf(BusinessException.class)
@@ -59,13 +62,29 @@ class TextToSqlServiceImplTest {
     }
 
     @Test
+    void shouldStopBeforeSqlAuditWhenModelStageIsUnavailable() {
+        when(promptBuilder.build("查询客户")).thenReturn("prompt");
+        when(modelResilienceGateway.generateSql("prompt")).thenReturn(
+                java.util.concurrent.CompletableFuture.failedFuture(
+                        new java.util.concurrent.TimeoutException("timeout")));
+
+        assertThatThrownBy(() -> textToSqlService.generateSql("查询客户"))
+                .isInstanceOf(com.aianalyst.common.ModelCallException.class)
+                .extracting(exception -> ((BusinessException) exception).getResultCode())
+                .isEqualTo(ResultCode.MODEL_SERVICE_UNAVAILABLE);
+
+        verify(sqlAuditService, never()).auditAndNormalize(anyString());
+    }
+
+    @Test
     void shouldAuditCorrectedSqlWithoutApplyingAnotherRateLimitToken() {
         String question = "查询客户";
         String failedSql = "SELECT customer_nam FROM biz_customer LIMIT 5";
         String error = "Unknown column 'customer_nam'";
         when(promptBuilder.buildCorrection(question, failedSql, error)).thenReturn("correction prompt");
-        when(deepSeekChatService.generate("correction prompt"))
-                .thenReturn("```sql\nSELECT customer_name FROM biz_customer LIMIT 5\n```");
+        when(modelResilienceGateway.generateSql("correction prompt"))
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(
+                        "```sql\nSELECT customer_name FROM biz_customer LIMIT 5\n```"));
         when(sqlAuditService.auditAndNormalize("SELECT customer_name FROM biz_customer LIMIT 5"))
                 .thenReturn("SELECT customer_name FROM biz_customer LIMIT 5");
 
@@ -82,12 +101,14 @@ class TextToSqlServiceImplTest {
         BusinessException auditFailure = new BusinessException(
                 ResultCode.SQL_AUDIT_FAILED, "只允许单条 SQL 语句");
         when(promptBuilder.build(question)).thenReturn("generation prompt");
-        when(deepSeekChatService.generate("generation prompt")).thenReturn(candidate);
+        when(modelResilienceGateway.generateSql("generation prompt"))
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(candidate));
         when(sqlAuditService.auditAndNormalize(candidate)).thenThrow(auditFailure);
         when(promptBuilder.buildAuditCorrection(
                 question, candidate, "只允许单条 SQL 语句"))
                 .thenReturn("audit correction prompt");
-        when(deepSeekChatService.generate("audit correction prompt")).thenReturn(corrected);
+        when(modelResilienceGateway.generateSql("audit correction prompt"))
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(corrected));
         when(sqlAuditService.auditAndNormalize(corrected)).thenReturn(corrected);
 
         SqlGenerationOutcome outcome = textToSqlService.generateSqlWithAuditRecovery(question);
@@ -105,7 +126,8 @@ class TextToSqlServiceImplTest {
         BusinessException auditFailure = new BusinessException(
                 ResultCode.SQL_AUDIT_FAILED, "引用了未授权的数据表：sys_user");
         when(promptBuilder.build(question)).thenReturn("generation prompt");
-        when(deepSeekChatService.generate("generation prompt")).thenReturn(candidate);
+        when(modelResilienceGateway.generateSql("generation prompt"))
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(candidate));
         when(sqlAuditService.auditAndNormalize(candidate)).thenThrow(auditFailure);
 
         assertThatThrownBy(() -> textToSqlService.generateSqlWithAuditRecovery(question))
@@ -125,17 +147,19 @@ class TextToSqlServiceImplTest {
         BusinessException secondFailure = new BusinessException(
                 ResultCode.SQL_AUDIT_FAILED, "只允许单条 SQL 语句");
         when(promptBuilder.build(question)).thenReturn("generation prompt");
-        when(deepSeekChatService.generate("generation prompt")).thenReturn(firstCandidate);
+        when(modelResilienceGateway.generateSql("generation prompt"))
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(firstCandidate));
         when(sqlAuditService.auditAndNormalize(firstCandidate)).thenThrow(firstFailure);
         when(promptBuilder.buildAuditCorrection(
                 question, firstCandidate, "只允许单条 SQL 语句"))
                 .thenReturn("audit correction prompt");
-        when(deepSeekChatService.generate("audit correction prompt")).thenReturn(secondCandidate);
+        when(modelResilienceGateway.generateSql("audit correction prompt"))
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(secondCandidate));
         when(sqlAuditService.auditAndNormalize(secondCandidate)).thenThrow(secondFailure);
 
         assertThatThrownBy(() -> textToSqlService.generateSqlWithAuditRecovery(question))
                 .isSameAs(secondFailure);
 
-        verify(deepSeekChatService).generate("audit correction prompt");
+        verify(modelResilienceGateway).generateSql("audit correction prompt");
     }
 }

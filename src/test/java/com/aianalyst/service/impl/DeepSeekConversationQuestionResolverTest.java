@@ -8,7 +8,7 @@ import com.aianalyst.dto.ConversationContextUpdateCommand;
 import com.aianalyst.dto.ConversationTurnSnapshot;
 import com.aianalyst.dto.ResolvedConversationQuestion;
 import com.aianalyst.service.ConversationContextService;
-import com.aianalyst.service.DeepSeekChatService;
+import com.aianalyst.service.ModelResilienceGateway;
 import com.aianalyst.service.QueryMetricsService;
 import com.aianalyst.service.TokenBudgetService;
 import com.aianalyst.service.TokenEstimator;
@@ -47,7 +47,7 @@ class DeepSeekConversationQuestionResolverTest {
     private ConversationContextPromptBuilder promptBuilder;
 
     @Mock
-    private DeepSeekChatService deepSeekChatService;
+    private ModelResilienceGateway modelResilienceGateway;
 
     @Mock
     private TokenBudgetService tokenBudgetService;
@@ -74,7 +74,7 @@ class DeepSeekConversationQuestionResolverTest {
                 7L, CONVERSATION_ID, "查询本月销售额");
 
         assertThat(result.standaloneQuestion()).isEqualTo("查询本月销售额");
-        verifyNoInteractions(promptBuilder, deepSeekChatService);
+        verifyNoInteractions(promptBuilder, modelResilienceGateway);
         verify(contextService, never()).updateContext(any(), any(), any());
     }
 
@@ -86,14 +86,15 @@ class DeepSeekConversationQuestionResolverTest {
                 List.of(turn(1L), turn(2L), turn(3L)));
         when(contextService.loadContext(7L, CONVERSATION_ID)).thenReturn(Optional.of(snapshot));
         when(promptBuilder.build(snapshot, "那华东呢？", 1)).thenReturn("planning prompt");
-        when(deepSeekChatService.generate("planning prompt")).thenReturn("""
+        when(modelResilienceGateway.planContext("planning prompt")).thenReturn(
+                java.util.concurrent.CompletableFuture.completedFuture("""
                 {
                   "standaloneQuestion": "查询华东地区本月销售额",
                   "topicChanged": false,
                   "structuredState": {"metric":"销售额","filters":[{"value":"华东"}]},
                   "rollingSummary": "此前摘要；第1轮查询了本月销售额"
                 }
-                """);
+                """));
         when(contextService.updateContext(any(), any(), any())).thenReturn(true);
 
         ResolvedConversationQuestion result = resolver.resolve(
@@ -121,14 +122,15 @@ class DeepSeekConversationQuestionResolverTest {
                 "旧主题摘要", 2L, "{\"metric\":\"销售额\"}", 5L, 9L, List.of(turn(5L)));
         when(contextService.loadContext(7L, CONVERSATION_ID)).thenReturn(Optional.of(snapshot));
         when(promptBuilder.build(snapshot, "查询客户总数", 0)).thenReturn("planning prompt");
-        when(deepSeekChatService.generate("planning prompt")).thenReturn("""
+        when(modelResilienceGateway.planContext("planning prompt")).thenReturn(
+                java.util.concurrent.CompletableFuture.completedFuture("""
                 {
                   "standaloneQuestion": "查询客户总数",
                   "topicChanged": true,
                   "structuredState": {"metric":"客户总数"},
                   "rollingSummary": ""
                 }
-                """);
+                """));
         when(contextService.updateContext(any(), any(), any())).thenReturn(true);
 
         ResolvedConversationQuestion result = resolver.resolve(
@@ -149,7 +151,9 @@ class DeepSeekConversationQuestionResolverTest {
         ConversationContextSnapshot snapshot = snapshot(null, 0L, null, 1L, 1L, List.of(turn(1L)));
         when(contextService.loadContext(7L, CONVERSATION_ID)).thenReturn(Optional.of(snapshot));
         when(promptBuilder.build(snapshot, "那华东呢？", 0)).thenReturn("planning prompt");
-        when(deepSeekChatService.generate("planning prompt")).thenThrow(new IllegalStateException("timeout"));
+        when(modelResilienceGateway.planContext("planning prompt")).thenReturn(
+                java.util.concurrent.CompletableFuture.failedFuture(
+                        new IllegalStateException("timeout")));
 
         assertThatThrownBy(() -> resolver.resolve(7L, CONVERSATION_ID, "那华东呢？"))
                 .isInstanceOf(BusinessException.class)
@@ -164,7 +168,9 @@ class DeepSeekConversationQuestionResolverTest {
         ConversationContextSnapshot snapshot = snapshot(null, 0L, null, 4L, 8L, List.of(turn(4L)));
         when(contextService.loadContext(7L, CONVERSATION_ID)).thenReturn(Optional.of(snapshot));
         when(promptBuilder.build(snapshot, "查询本月客户总数", 0)).thenReturn("planning prompt");
-        when(deepSeekChatService.generate("planning prompt")).thenThrow(new IllegalStateException("timeout"));
+        when(modelResilienceGateway.planContext("planning prompt")).thenReturn(
+                java.util.concurrent.CompletableFuture.failedFuture(
+                        new IllegalStateException("timeout")));
         when(contextService.updateContext(any(), any(), any())).thenReturn(true);
 
         ResolvedConversationQuestion result = resolver.resolve(
@@ -196,20 +202,22 @@ class DeepSeekConversationQuestionResolverTest {
                 .thenReturn(assessment(true));
         when(promptBuilder.buildCompression(snapshot, 1, 1_024))
                 .thenReturn("compression prompt");
-        when(deepSeekChatService.generate("compression prompt"))
-                .thenReturn("{\"rollingSummary\":\"压缩摘要\"}");
+        when(modelResilienceGateway.compressContext("compression prompt"))
+                .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(
+                        "{\"rollingSummary\":\"压缩摘要\"}"));
         when(promptBuilder.build(compressedSnapshot, question, 0))
                 .thenReturn("compressed planning prompt");
         when(tokenBudgetService.assess("compressed planning prompt"))
                 .thenReturn(assessment(false));
-        when(deepSeekChatService.generate("compressed planning prompt")).thenReturn("""
+        when(modelResilienceGateway.planContext("compressed planning prompt")).thenReturn(
+                java.util.concurrent.CompletableFuture.completedFuture("""
                 {
                   "standaloneQuestion": "查询华东地区销售额",
                   "topicChanged": false,
                   "structuredState": {"metric":"销售额"},
                   "rollingSummary": "压缩摘要"
                 }
-                """);
+                """));
         when(contextService.updateContext(any(), any(), any())).thenReturn(true, true);
 
         ResolvedConversationQuestion result = resolver.resolve(
@@ -224,6 +232,30 @@ class DeepSeekConversationQuestionResolverTest {
         assertThat(commandCaptor.getAllValues().get(0).summaryUntilTurn()).isEqualTo(1L);
         assertThat(commandCaptor.getAllValues().get(1).expectedVersion()).isEqualTo(8L);
         assertThat(commandCaptor.getAllValues().get(1).removeOldestTurns()).isZero();
+        verify(queryMetricsService).recordTokenCompression();
+    }
+
+    @Test
+    void shouldKeepOriginalContextWhenCompressionModelIsUnavailable() {
+        DeepSeekConversationQuestionResolver resolver = resolver();
+        String question = "那华东呢？";
+        ConversationContextSnapshot snapshot = snapshot(
+                "很长的旧摘要", 0L, "{}", 3L, 7L,
+                List.of(turn(1L), turn(2L), turn(3L)));
+        when(contextService.loadContext(7L, CONVERSATION_ID)).thenReturn(Optional.of(snapshot));
+        when(promptBuilder.build(snapshot, question, 1)).thenReturn("oversized planning prompt");
+        when(tokenBudgetService.assess("oversized planning prompt")).thenReturn(assessment(true));
+        when(promptBuilder.buildCompression(snapshot, 1, 1_024)).thenReturn("compression prompt");
+        when(modelResilienceGateway.compressContext("compression prompt")).thenReturn(
+                java.util.concurrent.CompletableFuture.failedFuture(
+                        new java.util.concurrent.TimeoutException("timeout")));
+
+        assertThatThrownBy(() -> resolver.resolve(7L, CONVERSATION_ID, question))
+                .isInstanceOf(com.aianalyst.common.ModelCallException.class)
+                .extracting(exception -> ((BusinessException) exception).getResultCode())
+                .isEqualTo(com.aianalyst.common.ResultCode.MODEL_SERVICE_UNAVAILABLE);
+
+        verify(contextService, never()).updateContext(any(), any(), any());
         verify(queryMetricsService).recordTokenCompression();
     }
 
@@ -244,14 +276,14 @@ class DeepSeekConversationQuestionResolverTest {
                 .isEqualTo(com.aianalyst.common.ResultCode.CONTEXT_WINDOW_EXCEEDED);
 
         verify(queryMetricsService).recordTokenBudgetRejected();
-        verifyNoInteractions(deepSeekChatService);
+        verifyNoInteractions(modelResilienceGateway);
     }
 
     private DeepSeekConversationQuestionResolver resolver() {
         return new DeepSeekConversationQuestionResolver(
                 contextService,
                 promptBuilder,
-                deepSeekChatService,
+                modelResilienceGateway,
                 new ObjectMapper().findAndRegisterModules(),
                 new ConversationProperties(),
                 tokenBudgetService,

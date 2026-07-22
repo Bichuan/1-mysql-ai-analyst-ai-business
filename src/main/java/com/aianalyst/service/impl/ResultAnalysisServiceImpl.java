@@ -1,6 +1,8 @@
 package com.aianalyst.service.impl;
 
-import com.aianalyst.service.DeepSeekChatService;
+import com.aianalyst.service.ModelCallAwaiter;
+import com.aianalyst.service.ModelCallType;
+import com.aianalyst.service.ModelResilienceGateway;
 import com.aianalyst.service.ResultAnalysisService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,11 +26,11 @@ public class ResultAnalysisServiceImpl implements ResultAnalysisService {
     private static final int MAX_ROWS_FOR_ANALYSIS = 100;
     private static final int MAX_ANALYSIS_JSON_CHARACTERS = 12_000;
 
-    private final DeepSeekChatService deepSeekChatService;
+    private final ModelResilienceGateway modelResilienceGateway;
     private final ObjectMapper objectMapper;
 
-    public ResultAnalysisServiceImpl(DeepSeekChatService deepSeekChatService, ObjectMapper objectMapper) {
-        this.deepSeekChatService = deepSeekChatService;
+    public ResultAnalysisServiceImpl(ModelResilienceGateway modelResilienceGateway, ObjectMapper objectMapper) {
+        this.modelResilienceGateway = modelResilienceGateway;
         this.objectMapper = objectMapper;
     }
 
@@ -37,9 +39,12 @@ public class ResultAnalysisServiceImpl implements ResultAnalysisService {
         List<Map<String, Object>> analysisRows = selectRowsForAnalysis(maskedRows);
         try {
             String dataJson = objectMapper.writeValueAsString(analysisRows);
-            String summary = deepSeekChatService.generate(buildPrompt(
+            String prompt = buildPrompt(
                     question, sql, dataJson, totalRowCount, analysisRows.size(),
-                    analysisRows.size() < maskedRows.size()));
+                    analysisRows.size() < maskedRows.size());
+            String summary = ModelCallAwaiter.await(
+                    ModelCallType.RESULT_ANALYSIS,
+                    () -> modelResilienceGateway.analyzeResult(prompt));
             if (StringUtils.hasText(summary)) {
                 return summary.trim();
             }

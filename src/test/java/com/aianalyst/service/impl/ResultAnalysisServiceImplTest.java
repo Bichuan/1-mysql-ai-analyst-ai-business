@@ -1,6 +1,6 @@
 package com.aianalyst.service.impl;
 
-import com.aianalyst.service.DeepSeekChatService;
+import com.aianalyst.service.ModelResilienceGateway;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,20 +20,23 @@ import static org.mockito.Mockito.when;
 class ResultAnalysisServiceImplTest {
 
     @Mock
-    private DeepSeekChatService deepSeekChatService;
+    private ModelResilienceGateway modelResilienceGateway;
 
     @Test
     void shouldAnalyzeOnlyProvidedMaskedRows() {
-        ResultAnalysisServiceImpl service = new ResultAnalysisServiceImpl(deepSeekChatService, new ObjectMapper());
+        ResultAnalysisServiceImpl service = new ResultAnalysisServiceImpl(
+                modelResilienceGateway, new ObjectMapper());
         List<Map<String, Object>> maskedRows = List.of(
                 Map.of("customer_name", "企业客户001", "email", "t***@gmail.com", "sales", 19081.2));
-        when(deepSeekChatService.generate(anyString())).thenReturn("- 企业客户001销售额最高。\n- 共返回1条数据。");
+        when(modelResilienceGateway.analyzeResult(anyString())).thenReturn(
+                java.util.concurrent.CompletableFuture.completedFuture(
+                        "- 企业客户001销售额最高。\n- 共返回1条数据。"));
 
         String summary = service.analyze("查询销售额", "SELECT ...", maskedRows, 1);
 
         assertThat(summary).contains("销售额最高");
         ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(deepSeekChatService).generate(promptCaptor.capture());
+        verify(modelResilienceGateway).analyzeResult(promptCaptor.capture());
         assertThat(promptCaptor.getValue())
                 .contains("t***@gmail.com")
                 .doesNotContain("test@gmail.com")
@@ -43,8 +46,11 @@ class ResultAnalysisServiceImplTest {
 
     @Test
     void shouldReturnFallbackWhenAiCallFails() {
-        ResultAnalysisServiceImpl service = new ResultAnalysisServiceImpl(deepSeekChatService, new ObjectMapper());
-        when(deepSeekChatService.generate(anyString())).thenThrow(new IllegalStateException("temporary failure"));
+        ResultAnalysisServiceImpl service = new ResultAnalysisServiceImpl(
+                modelResilienceGateway, new ObjectMapper());
+        when(modelResilienceGateway.analyzeResult(anyString())).thenReturn(
+                java.util.concurrent.CompletableFuture.failedFuture(
+                        new IllegalStateException("temporary failure")));
 
         String summary = service.analyze("查询客户", "SELECT ...", List.of(), 0);
 

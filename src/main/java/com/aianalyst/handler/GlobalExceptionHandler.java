@@ -63,6 +63,7 @@ public class GlobalExceptionHandler {
                 exception.getResultCode().getCode(), exception.getMessage());
         HttpStatus status = switch (exception.getResultCode()) {
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
+            case MODEL_SERVICE_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case NOT_FOUND -> HttpStatus.NOT_FOUND;
             default -> HttpStatus.BAD_REQUEST;

@@ -25,6 +25,7 @@ flowchart TB
         Execute[只读 SQL 执行]
         Mask[结果脱敏]
         Summary[AI 结果总结]
+        Resilience[有界异步池 / CircuitBreaker / TimeLimiter]
         History[异步审计历史]
     end
 
@@ -35,9 +36,9 @@ flowchart TB
 
     Client --> Security --> Controller --> Orchestrator
     Orchestrator --> Guard --> Redis
-    Orchestrator --> Text2SQL --> LLM
+    Orchestrator --> Text2SQL --> Resilience --> LLM
     Text2SQL --> Audit --> Execute --> BusinessDB
-    Execute --> Mask --> Summary --> LLM
+    Execute --> Mask --> Summary --> Resilience
     Orchestrator -. CompletableFuture .-> History --> SystemDB
     Orchestrator <--> Redis
 ```
@@ -122,7 +123,21 @@ flowchart LR
 
 ## 9. 并发与审计历史
 
-主查询链路同步返回 SQL、数据和 AI 总结，便于前端一次展示完整结果。历史记录不影响响应，因此通过 `CompletableFuture.runAsync` 写入独立线程池：
+主查询链路同步返回 SQL、数据和 AI 总结，便于前端一次展示完整结果。阻塞式模型 I/O
+通过 `@Async + CompletableFuture` 提交到有界线程池，并在业务线程上由 TimeLimiter
+控制最长等待时间：
+
+| 线程池 | 默认 core/max/queue | 承担任务 |
+|---|---:|---|
+| `llm-core` | 4 / 6 / 20 | 上下文规划、压缩、Text-to-SQL |
+| `llm-analysis` | 1 / 2 / 10 | 可降级的结果总结 |
+| `query-orchestration` | 4 / 8 / 50 | 后续异步查询编排预留 |
+
+三个线程池均使用 `AbortPolicy`。队列耗尽时快速拒绝，不使用 `CallerRunsPolicy` 阻塞 HTTP
+请求线程；线程池拒绝也不会计入模型供应商熔断失败率。上下文规划、Text-to-SQL、上下文
+压缩和结果总结各自拥有独立 CircuitBreaker，避免可选分析故障拖累核心 SQL 生成。
+
+历史记录不影响响应，因此通过 `CompletableFuture.runAsync` 写入另一套独立线程池：
 
 - 核心线程数：2；
 - 最大线程数：4；
@@ -187,6 +202,10 @@ erDiagram
 - 普通用户只能匿名查看不含内部细节的健康状态。
 - `/actuator/metrics/**` 只允许 `ADMIN` 访问。
 - 指标覆盖查询总量、成功/失败、缓存命中、请求耗时、历史线程池状态，以及模型 Prompt Token 估算、上下文压缩和预算拒绝次数。
+- Resilience4j 指标按阶段暴露调用结果、熔断状态、失败率、慢调用率和 TimeLimiter 超时。
+- `ai.model.executor.*` 使用固定 `pool` 标签暴露三类模型工作线程池的活跃数、队列占用和剩余容量。
+- `/actuator/circuitbreakers`、`/actuator/circuitbreakerevents`、`/actuator/timelimiters` 和
+  `/actuator/timelimiterevents` 仅对管理员开放。
 
 ## 12. 后续扩展边界
 

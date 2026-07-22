@@ -69,6 +69,46 @@ ai:
     context-usage-limit: ${DEEPSEEK_CONTEXT_USAGE_LIMIT:0.80}
     token-safety-margin: ${DEEPSEEK_TOKEN_SAFETY_MARGIN:256}
 
+resilience4j:
+  circuitbreaker:
+    configs:
+      llm-default:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        slow-call-rate-threshold: 60
+        slow-call-duration-threshold: 15s
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-failure-predicate: com.aianalyst.config.ModelCircuitBreakerFailurePredicate
+        ignore-exception-predicate: com.aianalyst.config.ModelCircuitBreakerIgnorePredicate
+        event-consumer-buffer-size: 20
+    instances:
+      llm-context-planning:
+        base-config: llm-default
+      llm-text-to-sql:
+        base-config: llm-default
+      llm-context-compression:
+        base-config: llm-default
+      llm-result-analysis:
+        base-config: llm-default
+  timelimiter:
+    instances:
+      llm-context-planning:
+        timeout-duration: ${LLM_CONTEXT_PLANNING_TIMEOUT:15s}
+        cancel-running-future: true
+      llm-text-to-sql:
+        timeout-duration: ${LLM_TEXT_TO_SQL_TIMEOUT:20s}
+        cancel-running-future: true
+      llm-context-compression:
+        timeout-duration: ${LLM_CONTEXT_COMPRESSION_TIMEOUT:15s}
+        cancel-running-future: true
+      llm-result-analysis:
+        timeout-duration: ${LLM_RESULT_ANALYSIS_TIMEOUT:10s}
+        cancel-running-future: true
+
 knife4j:
   enable: true
   setting:
@@ -78,7 +118,8 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        # All endpoints except health remain protected by the ADMIN rule in SecurityConfig.
+        include: health,info,metrics,circuitbreakers,circuitbreakerevents,timelimiters,timelimiterevents
   endpoint:
     health:
       # 健康检查允许匿名访问时只展示 UP/DOWN，不能泄露数据库、Redis 等内部连接细节。

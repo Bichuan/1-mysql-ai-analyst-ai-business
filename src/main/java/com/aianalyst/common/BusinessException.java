@@ -18,6 +18,11 @@ public class BusinessException extends RuntimeException {
         this.resultCode = resultCode;
     }
 
+    public BusinessException(ResultCode resultCode, String message, Throwable cause) {
+        super(message, cause);
+        this.resultCode = resultCode;
+    }
+
     public ResultCode getResultCode() {
         return resultCode;
     }

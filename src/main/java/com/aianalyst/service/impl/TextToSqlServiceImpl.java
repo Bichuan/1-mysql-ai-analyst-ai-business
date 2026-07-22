@@ -3,7 +3,9 @@ package com.aianalyst.service.impl;
 import com.aianalyst.common.BusinessException;
 import com.aianalyst.common.ResultCode;
 import com.aianalyst.dto.SqlGenerationOutcome;
-import com.aianalyst.service.DeepSeekChatService;
+import com.aianalyst.service.ModelCallAwaiter;
+import com.aianalyst.service.ModelCallType;
+import com.aianalyst.service.ModelResilienceGateway;
 import com.aianalyst.service.SqlAuditService;
 import com.aianalyst.service.prompt.TextToSqlPromptBuilder;
 import com.aianalyst.service.TextToSqlService;
@@ -25,14 +27,14 @@ public class TextToSqlServiceImpl implements TextToSqlService {
     private static final int MAX_FAILED_CANDIDATE_LENGTH = 8_000;
 
     private final TextToSqlPromptBuilder promptBuilder;
-    private final DeepSeekChatService deepSeekChatService;
+    private final ModelResilienceGateway modelResilienceGateway;
     private final SqlAuditService sqlAuditService;
 
     public TextToSqlServiceImpl(TextToSqlPromptBuilder promptBuilder,
-                                DeepSeekChatService deepSeekChatService,
+                                ModelResilienceGateway modelResilienceGateway,
                                 SqlAuditService sqlAuditService) {
         this.promptBuilder = promptBuilder;
-        this.deepSeekChatService = deepSeekChatService;
+        this.modelResilienceGateway = modelResilienceGateway;
         this.sqlAuditService = sqlAuditService;
     }
 
@@ -75,7 +77,9 @@ public class TextToSqlServiceImpl implements TextToSqlService {
     }
 
     private String generateCandidate(String prompt) {
-        String candidate = stripMarkdownFence(deepSeekChatService.generate(prompt));
+        String candidate = stripMarkdownFence(ModelCallAwaiter.await(
+                ModelCallType.TEXT_TO_SQL,
+                () -> modelResilienceGateway.generateSql(prompt)));
         if (!StringUtils.hasText(candidate)) {
             throw new BusinessException(ResultCode.BUSINESS_ERROR, "模型未返回可用 SQL");
         }

@@ -9,7 +9,9 @@ import com.aianalyst.dto.ConversationTurnSnapshot;
 import com.aianalyst.dto.ResolvedConversationQuestion;
 import com.aianalyst.service.ConversationContextService;
 import com.aianalyst.service.ConversationQuestionResolver;
-import com.aianalyst.service.DeepSeekChatService;
+import com.aianalyst.service.ModelCallAwaiter;
+import com.aianalyst.service.ModelCallType;
+import com.aianalyst.service.ModelResilienceGateway;
 import com.aianalyst.service.QueryMetricsService;
 import com.aianalyst.service.TokenBudgetService;
 import com.aianalyst.service.TokenEstimator;
@@ -41,7 +43,7 @@ public class DeepSeekConversationQuestionResolver implements ConversationQuestio
 
     private final ConversationContextService contextService;
     private final ConversationContextPromptBuilder promptBuilder;
-    private final DeepSeekChatService deepSeekChatService;
+    private final ModelResilienceGateway modelResilienceGateway;
     private final ObjectMapper objectMapper;
     private final ConversationProperties properties;
     private final TokenBudgetService tokenBudgetService;
@@ -50,7 +52,7 @@ public class DeepSeekConversationQuestionResolver implements ConversationQuestio
 
     public DeepSeekConversationQuestionResolver(ConversationContextService contextService,
                                                 ConversationContextPromptBuilder promptBuilder,
-                                                DeepSeekChatService deepSeekChatService,
+                                                ModelResilienceGateway modelResilienceGateway,
                                                 ObjectMapper objectMapper,
                                                 ConversationProperties properties,
                                                 TokenBudgetService tokenBudgetService,
@@ -58,7 +60,7 @@ public class DeepSeekConversationQuestionResolver implements ConversationQuestio
                                                 QueryMetricsService queryMetricsService) {
         this.contextService = contextService;
         this.promptBuilder = promptBuilder;
-        this.deepSeekChatService = deepSeekChatService;
+        this.modelResilienceGateway = modelResilienceGateway;
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.tokenBudgetService = tokenBudgetService;
@@ -89,7 +91,9 @@ public class DeepSeekConversationQuestionResolver implements ConversationQuestio
             ModelPlan plan;
             try {
                 plan = parsePlan(
-                        deepSeekChatService.generate(prepared.prompt()),
+                        ModelCallAwaiter.await(
+                                ModelCallType.CONTEXT_PLANNING,
+                                () -> modelResilienceGateway.planContext(prepared.prompt())),
                         compactionTurnCount > 0);
             } catch (RuntimeException exception) {
                 return fallbackOrReject(userId, conversationId, currentQuestion, snapshot, exception);
@@ -191,7 +195,9 @@ public class DeepSeekConversationQuestionResolver implements ConversationQuestio
                 snapshot, turnsToCompress, properties.getRollingSummaryTargetTokens());
         String compressedSummary;
         try {
-            compressedSummary = parseCompressedSummary(deepSeekChatService.generate(compressionPrompt));
+            compressedSummary = parseCompressedSummary(ModelCallAwaiter.await(
+                    ModelCallType.CONTEXT_COMPRESSION,
+                    () -> modelResilienceGateway.compressContext(compressionPrompt)));
         } catch (BusinessException exception) {
             throw exception;
         } catch (RuntimeException exception) {

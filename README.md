@@ -9,7 +9,8 @@
 - **双数据源隔离**：系统库由 MyBatis Plus 管理，动态业务 SQL 只能通过只读 `JdbcTemplate` 执行。
 - **AI 自纠错**：多语句/格式错误最多修复一次，执行语法/字段错误使用剩余额度；共享最多两次，权限、网络和危险能力拒绝不重试。
 - **数据最小暴露**：查询结果先脱敏，再发送给大模型总结；缓存和历史记录同样只保存脱敏数据。
-- **性能与可观测性**：Redis 缓存、Lua 原子限流、独立审计线程池，以及 Micrometer 查询、缓存和线程池指标。
+- **分阶段模型韧性**：上下文规划、Text-to-SQL、上下文压缩和结果总结使用独立熔断器与超时策略，有界线程池隔离核心生成和可选分析任务。
+- **性能与可观测性**：Redis 缓存、Lua 原子限流、独立审计线程池，以及 Micrometer 查询、熔断、超时和线程池指标。
 
 ## 核心架构
 
@@ -20,12 +21,15 @@ flowchart LR
     C --> O[DataQueryService 编排]
     O --> G[意图与语义校验]
     G --> R[Redis 限流与缓存]
-    R --> L[LangChain4j / DeepSeek]
+    R --> F[核心有界池 + SQL 阶段熔断/超时]
+    F --> L[LangChain4j / DeepSeek SQL 生成]
     L --> A[JSqlParser SQL 审核]
     A --> B[(MySQL 业务库\n只读账号)]
     B --> M[结果脱敏]
-    M --> L
+    M --> AF[分析有界池 + 总结熔断/超时]
+    AF --> AL[DeepSeek 结果总结]
     M --> V[查询结果与 AI 总结]
+    AL --> V
     O -. 异步 .-> H[(系统库查询历史)]
 ```
 
@@ -37,11 +41,11 @@ flowchart LR
 2. 校验自然语言是否包含写操作意图、非法 TopN 等危险语义。
 3. Redis Lua 脚本按用户执行每分钟查询限流。
 4. 查询用户级语义缓存，命中时直接返回脱敏结果。
-5. LangChain4j 调用大模型生成 SQL。
+5. 核心有界线程池调用大模型生成 SQL，并由独立熔断器和 TimeLimiter 保护。
 6. JSqlParser 检查单条 `SELECT`、表白名单、危险函数和最大 `LIMIT 1000`。
 7. 使用 MySQL `SELECT` 权限账号执行动态 SQL，并设置查询超时。
 8. 对结果中的手机号、邮箱、身份证号和银行卡号等信息脱敏。
-9. 大模型同步生成业务总结，Redis 缓存完整安全响应。
+9. 分析线程池生成业务总结；失败时保留查询数据并返回降级文案。
 10. 独立 JUC 线程池异步保存查询审计历史。
 
 ## 技术栈
@@ -52,7 +56,7 @@ flowchart LR
 | 安全 | Spring Security、JWT、BCrypt、JSqlParser |
 | 数据 | MySQL 8、Redis、HikariCP |
 | AI | LangChain4j、DeepSeek 兼容 OpenAI API |
-| 并发与监控 | JUC 线程池、CompletableFuture、Micrometer、Actuator |
+| 并发与监控 | `@Async`、CompletableFuture、Resilience4j、Micrometer、Actuator |
 | 前端 | Vue 3、Vite、Element Plus、Axios |
 | 工程化 | Maven Wrapper、Knife4j、Docker Compose |
 
@@ -182,7 +186,9 @@ docker compose logs -f app
 | GET | `/api/query-histories` | 分页查询当前用户的历史记录 |
 | GET | `/api/actuator/health` | 服务健康检查，无需登录 |
 
-`/api/actuator/metrics/**` 仅允许角色为 `ADMIN` 的用户访问。
+`/api/actuator/metrics/**`、`/api/actuator/circuitbreakers` 和
+`/api/actuator/timelimiters` 仅允许角色为 `ADMIN` 的用户访问。模型韧性参数、指标和
+故障演练步骤见 [模型熔断与降级运维手册](docs/llm-resilience-runbook.md)。
 
 ## 数据库初始化（本地手动方式）
 
@@ -226,3 +232,5 @@ npm.cmd run dev
 - Day29 最近窗口、追问改写与滚动摘要：[`docs/day29-context-window-guide.md`](docs/day29-context-window-guide.md)
 - Day30 Token 预算、80%硬阈值与压力压缩：[`docs/day30-token-budget-guide.md`](docs/day30-token-budget-guide.md)
 - Day28～30 多轮上下文综合学习手册：[`docs/day28-30-conversation-context-study-guide.md`](docs/day28-30-conversation-context-study-guide.md)
+- 模型熔断、超时、线程池隔离与故障演练：[`docs/llm-resilience-runbook.md`](docs/llm-resilience-runbook.md)
+- Day31～33 模型异步隔离、熔断降级学习手册：[`docs/day31-33-llm-resilience-study-guide.md`](docs/day31-33-llm-resilience-study-guide.md)
